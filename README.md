@@ -1,5 +1,5 @@
-# CuVoxelization
-`CuVoxelization` is an **CUDA** implementation of voxelization. The given points is a two-dimension `torch.Tensor # [num_points, 3]`, and the output voxels is a three-dimension `torch.Tensor # [num_voxels, max_points, 3]`.
+# CuStereoMatching
+`CuStereoMatching` is an **CUDA** implementation of stereo matching.
 
 ## Requirements
 The enviroment of my developer machine:
@@ -18,18 +18,18 @@ pip install .
 ```
 Or use:
 ```sh
-pip install https://github.com/lzhnb/CuVoxelization
+pip install https://github.com/lzhnb/CuStereoMatching
 ```
 
 ## TODO
 - [x] Examples (More Example)
+- [x] Support backward
 - [ ] Optimize the code
 - [ ] More elegant Python Wrapper
-- [ ] Support backward
 - [ ] Visualization
 
 ## Example
 Put the `points.npy` file under `examples` directory, then run
 ```sh
-python verify.py
+python examples/test.py
 ```
