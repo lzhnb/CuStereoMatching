@@ -3,5 +3,6 @@
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("stereo_matching_forward", &stereo::stereo_matching_forward);
+    m.def("stereo_matching_backward", &stereo::stereo_matching_backward);
 }
 

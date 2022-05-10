@@ -46,6 +46,7 @@ def differentiable_disparity_calculating(
     cost_volume_threshold: float
 ) -> torch.Tensor:
 
+    camera_image.requires_grad_(True)
     camera_image_patches = extract_image_patch_pytoch(
         camera_image.unsqueeze(0).unsqueeze(0),
         kernel = kernel_size,
@@ -60,8 +61,10 @@ def differentiable_disparity_calculating(
         pad = int((kernel_size - 1) / 2)
     ).squeeze(0).squeeze(0)
 
-    cost_volume = custma.stereo_matching_forward(camera_image_patches.contiguous(), projector_image_patches.contiguous(), 200, kernel_size)
-    # cost_volume = custma.stereo_matching_forward(camera_image.contiguous(), projector_image.contiguous(), 200, kernel_size)
+    camera_image_patches.retain_grad()
+    cost_volume = custma.stereo_matching(camera_image_patches.contiguous(), projector_image_patches.contiguous(), 200, kernel_size)
+    import ipdb; ipdb.set_trace()
+    cost_volume.backward(torch.ones_like(cost_volume))
 
     print("Cost Volume shape:", cost_volume.shape)
     # Detach To Calculate Cost Volume Mask

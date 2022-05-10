@@ -11,6 +11,8 @@ namespace stereo
     void centerize_patches(Tensor&);
     Tensor stereo_matching_forward(const Tensor&, const Tensor&, const int32_t, const int32_t);
     Tensor stereo_matching_forward_wrapper(const Tensor&, const Tensor&, const int32_t, const int32_t, Tensor&);
+    Tensor stereo_matching_backward(const Tensor&, const Tensor&, const Tensor&, const int32_t);
+    void stereo_matching_backward_wrapper(const Tensor&, const Tensor&, const Tensor&, const int32_t, Tensor&);
 } // namespace stereo
 
 
