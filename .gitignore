@@ -1,0 +1,13 @@
+# directory
+*build*
+*egg*
+__pycache__
+.vscode
+dist
+
+# file
+*.so
+*.npy
+*.ply
+*.obj
+.pypirc
