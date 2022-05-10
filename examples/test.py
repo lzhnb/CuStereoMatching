@@ -1,3 +1,5 @@
+import os
+
 import cv2
 import numpy as np
 import torch
@@ -44,22 +46,22 @@ def differentiable_disparity_calculating(
     cost_volume_threshold: float
 ) -> torch.Tensor:
 
-    # camera_image_patches = extract_image_patch_pytoch(
-    #     camera_image.unsqueeze(0).unsqueeze(0),
-    #     kernel = kernel_size,
-    #     stride = 1,
-    #     pad = int((kernel_size - 1) / 2)
-    # ).squeeze(0).squeeze(0)
+    camera_image_patches = extract_image_patch_pytoch(
+        camera_image.unsqueeze(0).unsqueeze(0),
+        kernel = kernel_size,
+        stride = 1,
+        pad = int((kernel_size - 1) / 2)
+    ).squeeze(0).squeeze(0)
 
-    # projector_image_patches = extract_image_patch_pytoch(
-    #     projector_image.unsqueeze(0).unsqueeze(0),
-    #     kernel = kernel_size,
-    #     stride = 1,
-    #     pad = int((kernel_size - 1) / 2)
-    # ).squeeze(0).squeeze(0)
+    projector_image_patches = extract_image_patch_pytoch(
+        projector_image.unsqueeze(0).unsqueeze(0),
+        kernel = kernel_size,
+        stride = 1,
+        pad = int((kernel_size - 1) / 2)
+    ).squeeze(0).squeeze(0)
 
-    # cost_volume = custma.stereo_matching_forward(camera_image_patches.contiguous(), projector_image_patches.contiguous(), 200, kernel_size)
-    cost_volume = custma.stereo_matching_forward(camera_image.contiguous(), projector_image.contiguous(), 200, kernel_size)
+    cost_volume = custma.stereo_matching_forward(camera_image_patches.contiguous(), projector_image_patches.contiguous(), 200, kernel_size)
+    # cost_volume = custma.stereo_matching_forward(camera_image.contiguous(), projector_image.contiguous(), 200, kernel_size)
 
     print("Cost Volume shape:", cost_volume.shape)
     # Detach To Calculate Cost Volume Mask
@@ -67,11 +69,8 @@ def differentiable_disparity_calculating(
     cost_volume_max = cost_volume_max.reshape(H, (W - D))
     cost_volume_mask = torch.where(cost_volume_max > cost_volume_threshold, torch.ones_like(cost_volume_max), torch.zeros_like(cost_volume_max))
 
-    cv2.imwrite("temp.png", np.array(cost_volume_mask.cpu()) * 255)
-    torch.cuda.empty_cache()
-    import ipdb; ipdb.set_trace()
+    cv2.imwrite(os.path.join(os.path.dirname(__file__), "temp.png"), np.array(cost_volume_mask.cpu()) * 255)
 
-    pass
     # cv2.imshow("Cost Volume Mask", np.array(cost_volume_mask.cpu()))
     # correspondence_argmax = torch.argmax(cost_volume, dim=-1)
     # correspondence_softargmax = soft_argmax(cost_volume.contiguous().reshape(1, H * W, -1), softargmax_beta).reshape(H, W)
@@ -87,8 +86,9 @@ def differentiable_disparity_calculating(
 
 
 if __name__ == "__main__":
-    rgb = np.array(cv2.imread("test_chair_0003_rgb_20220504_3.png")) / 255
-    proj = np.array(cv2.imread("SpecklePattern_PreRender_D51/4/0.png", 0)) / 255
+    root_dir = os.path.dirname(__file__)
+    rgb = np.array(cv2.imread(os.path.join(root_dir, "test_chair_0003_rgb_20220504_3.png"))) / 255
+    proj = np.array(cv2.imread(os.path.join(root_dir, "SpecklePattern_PreRender_D51/4/0.png"), 0)) / 255
 
     rgb = torch.tensor(rgb, dtype=torch.float32).cuda()
     proj = torch.tensor(proj, dtype=torch.float32).cuda()
