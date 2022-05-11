@@ -58,8 +58,9 @@ Tensor stereo::stereo_matching_backward(
     CHECK_INPUT(cost_volume_grad);
 
     // get parameters
-    const int32_t H = cost_volume_grad.size(0), crop_w = cost_volume_grad.size(1), D = cost_volume_grad.size(2) - 1;
-    const int32_t W = crop_w + D;
+    const int32_t H = cost_volume_grad.size(0), W = cost_volume_grad.size(1), D = cost_volume_grad.size(2);
+    // const int32_t H = cost_volume_grad.size(0), crop_w = cost_volume_grad.size(1), D = cost_volume_grad.size(2) - 1;
+    // const int32_t W = crop_w + D;
 
     // reshape
     Tensor camera_flatten = camera.reshape({H, W, -1}); // [H, W, p_h * p_w]

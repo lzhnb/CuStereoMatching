@@ -31,5 +31,5 @@ pip install https://github.com/lzhnb/CuStereoMatching
 ## Example
 Put the `points.npy` file under `examples` directory, then run
 ```sh
-python examples/test.py
+python examples/verify.py
 ```
