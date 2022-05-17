@@ -14,8 +14,8 @@ void stereo::centerize_patches(Tensor& patches    // [H, W, p_h * p_w]
 
 
 Tensor stereo::stereo_matching_forward(
-    const Tensor& camera,    // [H, W, ph, pw]
-    const Tensor& projector, // [H, W, ph, pw]
+    const Tensor& camera,    // [H, W]
+    const Tensor& projector, // [H, W]
     const int32_t D,
     const int32_t kernel_size
 ) {
@@ -27,19 +27,13 @@ Tensor stereo::stereo_matching_forward(
     const int32_t H = camera.size(0), W = camera.size(1);
     assert(projector.size(0) == H && projector.size(1) == W);
 
-    // reshape
-    Tensor camera_flatten = camera.reshape({H, W, -1}); // [H, W, p_h * p_w]
-    Tensor projector_flatten = projector.reshape({H, W, -1}); // [H, W, p_h * p_w]
-    centerize_patches(camera_flatten);
-    centerize_patches(projector_flatten);
-
     torch::Tensor disparity = torch::zeros({H, W},
             torch::TensorOptions().dtype(torch::kFloat).device(torch::kCUDA));
 
     // forward
     Tensor cost_volume = stereo_matching_forward_wrapper(
-        camera_flatten,
-        projector_flatten,
+        camera,
+        projector,
         D,
         kernel_size,
         disparity

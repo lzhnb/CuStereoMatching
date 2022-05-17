@@ -8,8 +8,8 @@ class _StereoMatching(torch.autograd.Function):
     @staticmethod
     def forward(
         ctx,
-        camera_image_patches: torch.Tensor,     # [H, W, p, p]
-        projector_image_patches: torch.Tensor,  # [H, W, p, p]
+        camera_image_patches: torch.Tensor,     # [H, W]
+        projector_image_patches: torch.Tensor,  # [H, W]
         D: int,
         kernel_size: int
     ) -> torch.Tensor:

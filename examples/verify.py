@@ -47,23 +47,23 @@ def cuda_cost_volume_backward(
 ) -> torch.Tensor:
 
     camera_image.requires_grad_(True)
-    camera_image_patches = extract_image_patch_pytoch(
-        camera_image.unsqueeze(0).unsqueeze(0),
-        kernel = kernel_size,
-        stride = 1,
-        pad = int((kernel_size - 1) / 2)
-    ).squeeze(0).squeeze(0)
+    # camera_image_patches = extract_image_patch_pytoch(
+    #     camera_image.unsqueeze(0).unsqueeze(0),
+    #     kernel = kernel_size,
+    #     stride = 1,
+    #     pad = int((kernel_size - 1) / 2)
+    # ).squeeze(0).squeeze(0)
 
-    projector_image_patches = extract_image_patch_pytoch(
-        projector_image.unsqueeze(0).unsqueeze(0),
-        kernel = kernel_size,
-        stride = 1,
-        pad = int((kernel_size - 1) / 2)
-    ).squeeze(0).squeeze(0)
+    # projector_image_patches = extract_image_patch_pytoch(
+    #     projector_image.unsqueeze(0).unsqueeze(0),
+    #     kernel = kernel_size,
+    #     stride = 1,
+    #     pad = int((kernel_size - 1) / 2)
+    # ).squeeze(0).squeeze(0)
+    # camera_image_patches.retain_grad()
 
-    camera_image_patches.retain_grad()
-    cost_volume = custma.stereo_matching(camera_image_patches.contiguous(), projector_image_patches.contiguous(), 200, kernel_size)
-    cost_volume.backward(torch.ones_like(cost_volume))
+    cost_volume = custma.stereo_matching(camera_image.contiguous(), projector_image.contiguous(), 200, kernel_size)
+    # cost_volume.backward(torch.ones_like(cost_volume))
 
     print("Cost Volume shape:", cost_volume.shape)
     # Detach To Calculate Cost Volume Mask
