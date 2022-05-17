@@ -94,7 +94,6 @@ __global__ void get_patches_grad_kernel(
     const int32_t w_idx = (tid / W) % W;
     const int32_t h_idx = tid / (W * W);
 
-
     // loop patch to get the mean value
     float cam_mean = 0, proj_mean = 0;
 #pragma unroll
@@ -144,12 +143,12 @@ __global__ void get_patches_grad_kernel(
             const float proj = query_ij(projector_ptr, H, W, cam_proj_i, proj_j) - proj_mean;
             // exy term
             float exy_factor = proj * deno;
-            atomicAdd(curr_camera_patches_grad_ptr + i * kernel_size + j, cost_grad * exy_factor);
             // ex2 term
             float ex2_factor = -(ey2 * cam * (exy + EPSILON)) * deno3;
-            atomicAdd(curr_camera_patches_grad_ptr + i * kernel_size + j, cost_grad * ex2_factor);
+            const float grad = cost_grad * (exy_factor + ex2_factor);
+            atomicAdd(curr_camera_patches_grad_ptr + i * kernel_size + j, grad);
         }
-    }  
+    }
 }
 
 
@@ -222,7 +221,7 @@ void stereo::stereo_matching_backward_wrapper(
     const Tensor& projector, // [H, W]
     const int32_t kernel_size,
     // output
-    Tensor& camera_grad             // [H, W]
+    Tensor& camera_grad      // [H, W]
 ) {
     // get parameters
     const int32_t H = cost_volume_grad.size(0), W = cost_volume_grad.size(1), D = cost_volume_grad.size(2);

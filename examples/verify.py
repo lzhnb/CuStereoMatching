@@ -62,8 +62,10 @@ def cuda_cost_volume_backward(
     # ).squeeze(0).squeeze(0)
     # camera_image_patches.retain_grad()
 
-    cost_volume = custma.stereo_matching(camera_image.contiguous(), projector_image.contiguous(), 200, kernel_size)
-    cost_volume.backward(torch.ones_like(cost_volume))
+    with custma.Timer("cuda forward time: {:.6f}s"):
+        cost_volume = custma.stereo_matching(camera_image.contiguous(), projector_image.contiguous(), 200, kernel_size)
+    with custma.Timer("cuda backward time: {:.6f}s"):
+        cost_volume.backward(torch.ones_like(cost_volume))
 
     print("Cost Volume shape:", cost_volume.shape)
     # Detach To Calculate Cost Volume Mask
@@ -71,7 +73,7 @@ def cuda_cost_volume_backward(
     cost_volume_max = cost_volume_max.reshape(H, W)
     cost_volume_mask = torch.where(cost_volume_max > cost_volume_threshold, torch.ones_like(cost_volume_max), torch.zeros_like(cost_volume_max))
 
-    cv2.imwrite(os.path.join(os.path.dirname(__file__), "temp.png"), np.array(cost_volume_mask.cpu()) * 255)
+    # cv2.imwrite(os.path.join(os.path.dirname(__file__), "temp.png"), np.array(cost_volume_mask.cpu()) * 255)
 
     return cost_volume, camera_image.grad
 
@@ -84,45 +86,49 @@ def torch_cost_volume_backward(
     cost_volume_threshold: float
 ) -> torch.Tensor:
     camera_image.requires_grad_(True)
-    camera_img_patches_ = extract_image_patch_pytoch(
-        camera_image.unsqueeze(0).unsqueeze(0),
-        kernel = kernel_size,
-        stride = 1,
-        pad = int((kernel_size - 1) / 2)
-    ).squeeze(0).squeeze(0)
-    camera_img_patches_.retain_grad()
 
-    projector_img_patches = extract_image_patch_pytoch(
-        projector_image.unsqueeze(0).unsqueeze(0),
-        kernel = kernel_size,
-        stride = 1,
-        pad = int((kernel_size - 1) / 2)
-    ).squeeze(0).squeeze(0)
+    with custma.Timer("torch forward time: {:.6f}s"):
+        camera_img_patches_ = extract_image_patch_pytoch(
+            camera_image.unsqueeze(0).unsqueeze(0),
+            kernel = kernel_size,
+            stride = 1,
+            pad = int((kernel_size - 1) / 2)
+        ).squeeze(0).squeeze(0)
+        camera_img_patches_.retain_grad()
+
+        projector_img_patches = extract_image_patch_pytoch(
+            projector_image.unsqueeze(0).unsqueeze(0),
+            kernel = kernel_size,
+            stride = 1,
+            pad = int((kernel_size - 1) / 2)
+        ).squeeze(0).squeeze(0)
 
 
-    H, W = camera_img_patches_.shape[:2]
-    camera_img_patches = camera_img_patches_.contiguous().reshape(H, W, -1)
-    projector_img_patches = projector_img_patches.contiguous().reshape(H, W, -1)
-    camera_img_patches_mean = torch.mean(camera_img_patches, dim=-1, keepdim=True)
-    projector_img_patches_mean = torch.mean(projector_img_patches, dim=-1, keepdim=True)
-    eps = 1e-8
-    camera_img_patches -= camera_img_patches_mean
-    projector_img_patches -= projector_img_patches_mean
-    # cost_volume = torch.zeros(H, W, W)
-    EXY = torch.bmm(camera_img_patches, projector_img_patches.permute(0, 2, 1))
-    # To faster calculate EX2 and EY2, reshape (H, W, Nd) to (H*W, 1, Nd), which maybe more efficient
-    EX2 = torch.bmm(camera_img_patches.reshape(H * W, 1, -1), camera_img_patches.reshape(H * W, 1, -1).permute(0, 2, 1)).reshape(H, W).unsqueeze(-1)
-    EY2 = torch.bmm(projector_img_patches.reshape(H * W, 1, -1), projector_img_patches.reshape(H * W, 1, -1).permute(0, 2, 1)).reshape(H, W).unsqueeze(-2)
-    cost_volume = (EXY + eps) / (torch.sqrt(EX2 * EY2 + eps))
-    cost_volume.backward(torch.ones_like(cost_volume))
+        H, W = camera_img_patches_.shape[:2]
+        camera_img_patches = camera_img_patches_.contiguous().reshape(H, W, -1)
+        projector_img_patches = projector_img_patches.contiguous().reshape(H, W, -1)
+        camera_img_patches_mean = torch.mean(camera_img_patches, dim=-1, keepdim=True)
+        projector_img_patches_mean = torch.mean(projector_img_patches, dim=-1, keepdim=True)
+        eps = 1e-8
+        camera_img_patches -= camera_img_patches_mean
+        projector_img_patches -= projector_img_patches_mean
+        # cost_volume = torch.zeros(H, W, W)
+        EXY = torch.bmm(camera_img_patches, projector_img_patches.permute(0, 2, 1))
+        # To faster calculate EX2 and EY2, reshape (H, W, Nd) to (H*W, 1, Nd), which maybe more efficient
+        EX2 = torch.bmm(camera_img_patches.reshape(H * W, 1, -1), camera_img_patches.reshape(H * W, 1, -1).permute(0, 2, 1)).reshape(H, W).unsqueeze(-1)
+        EY2 = torch.bmm(projector_img_patches.reshape(H * W, 1, -1), projector_img_patches.reshape(H * W, 1, -1).permute(0, 2, 1)).reshape(H, W).unsqueeze(-2)
+        cost_volume = (EXY + eps) / (torch.sqrt(EX2 * EY2 + eps))
 
-    print("Cost Volume shape:", cost_volume.shape)
-    # Detach To Calculate Cost Volume Mask
-    cost_volume_max, _ = torch.max(cost_volume.detach().contiguous().reshape(H * W, -1), dim=-1)
-    cost_volume_max = cost_volume_max.reshape(H, W)
-    cost_volume_mask = torch.where(cost_volume_max > cost_volume_threshold, torch.ones_like(cost_volume_max), torch.zeros_like(cost_volume_max))
+    with custma.Timer("torch backward time: {:.6f}s"):
+        cost_volume.backward(torch.ones_like(cost_volume))
 
-    cv2.imwrite(os.path.join(os.path.dirname(__file__), "temp_torch.png"), np.array(cost_volume_mask.cpu()) * 255)
+    # print("Cost Volume shape:", cost_volume.shape)
+    # # Detach To Calculate Cost Volume Mask
+    # cost_volume_max, _ = torch.max(cost_volume.detach().contiguous().reshape(H * W, -1), dim=-1)
+    # cost_volume_max = cost_volume_max.reshape(H, W)
+    # cost_volume_mask = torch.where(cost_volume_max > cost_volume_threshold, torch.ones_like(cost_volume_max), torch.zeros_like(cost_volume_max))
+
+    # cv2.imwrite(os.path.join(os.path.dirname(__file__), "temp_torch.png"), np.array(cost_volume_mask.cpu()) * 255)
 
     return cost_volume, camera_image.grad
 
@@ -138,10 +144,12 @@ if __name__ == "__main__":
     disparity = torch.zeros(rgb.shape[0], rgb.shape[1]).cuda()
     disparity_mask = torch.ones(rgb.shape[0], rgb.shape[1]).cuda()
 
-    cuda_cost_volume, cuda_camera_image_grad = \
-        cuda_cost_volume_backward(rgb[:,:, 0], proj, kernel_size, softargmax_beta, cost_volume_threshold)
-    torch_cost_volume, torch_camera_image_grad = \
-        torch_cost_volume_backward(rgb[:,:, 0], proj, kernel_size, softargmax_beta, cost_volume_threshold)
+    with custma.Timer("cuda time: {:.6f}s"):
+        cuda_cost_volume, cuda_camera_image_grad = \
+            cuda_cost_volume_backward(rgb[:,:, 0], proj, kernel_size, softargmax_beta, cost_volume_threshold)
+    with custma.Timer("torch time: {:.6f}s"):
+        torch_cost_volume, torch_camera_image_grad = \
+            torch_cost_volume_backward(rgb[:,:, 0], proj, kernel_size, softargmax_beta, cost_volume_threshold)
 
     import ipdb; ipdb.set_trace()
     print(cuda_camera_image_grad)
