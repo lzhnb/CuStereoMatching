@@ -63,7 +63,7 @@ def cuda_cost_volume_backward(
     # camera_image_patches.retain_grad()
 
     cost_volume = custma.stereo_matching(camera_image.contiguous(), projector_image.contiguous(), 200, kernel_size)
-    # cost_volume.backward(torch.ones_like(cost_volume))
+    cost_volume.backward(torch.ones_like(cost_volume))
 
     print("Cost Volume shape:", cost_volume.shape)
     # Detach To Calculate Cost Volume Mask
@@ -84,12 +84,13 @@ def torch_cost_volume_backward(
     cost_volume_threshold: float
 ) -> torch.Tensor:
     camera_image.requires_grad_(True)
-    camera_img_patches = extract_image_patch_pytoch(
+    camera_img_patches_ = extract_image_patch_pytoch(
         camera_image.unsqueeze(0).unsqueeze(0),
         kernel = kernel_size,
         stride = 1,
         pad = int((kernel_size - 1) / 2)
     ).squeeze(0).squeeze(0)
+    camera_img_patches_.retain_grad()
 
     projector_img_patches = extract_image_patch_pytoch(
         projector_image.unsqueeze(0).unsqueeze(0),
@@ -99,8 +100,8 @@ def torch_cost_volume_backward(
     ).squeeze(0).squeeze(0)
 
 
-    H, W = camera_img_patches.shape[:2]
-    camera_img_patches = camera_img_patches.contiguous().reshape(H, W, -1)
+    H, W = camera_img_patches_.shape[:2]
+    camera_img_patches = camera_img_patches_.contiguous().reshape(H, W, -1)
     projector_img_patches = projector_img_patches.contiguous().reshape(H, W, -1)
     camera_img_patches_mean = torch.mean(camera_img_patches, dim=-1, keepdim=True)
     projector_img_patches_mean = torch.mean(projector_img_patches, dim=-1, keepdim=True)
@@ -137,8 +138,10 @@ if __name__ == "__main__":
     disparity = torch.zeros(rgb.shape[0], rgb.shape[1]).cuda()
     disparity_mask = torch.ones(rgb.shape[0], rgb.shape[1]).cuda()
 
-    cuda_cost_volume, cuda_camera_image_grad = cuda_cost_volume_backward(rgb[:,:, 0], proj, kernel_size, softargmax_beta, cost_volume_threshold)
-    torch_cost_volume, torch_camera_image_grad = torch_cost_volume_backward(rgb[:,:, 0], proj, kernel_size, softargmax_beta, cost_volume_threshold)
+    cuda_cost_volume, cuda_camera_image_grad = \
+        cuda_cost_volume_backward(rgb[:,:, 0], proj, kernel_size, softargmax_beta, cost_volume_threshold)
+    torch_cost_volume, torch_camera_image_grad = \
+        torch_cost_volume_backward(rgb[:,:, 0], proj, kernel_size, softargmax_beta, cost_volume_threshold)
 
     import ipdb; ipdb.set_trace()
     print(cuda_camera_image_grad)

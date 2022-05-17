@@ -90,16 +90,17 @@ def differentiable_disparity_calculating(
 
 if __name__ == "__main__":
     root_dir = os.path.dirname(__file__)
-    rgb = np.array(cv2.imread(os.path.join(root_dir, "test_chair_0003_rgb_20220504_3.png"))) / 255
-    proj = np.array(cv2.imread(os.path.join(root_dir, "SpecklePattern_PreRender_D51/4/0.png"), 0)) / 255
-
-    rgb = torch.tensor(rgb, dtype=torch.float32).cuda()
-    proj = torch.tensor(proj, dtype=torch.float32).cuda()
-
-    disparity = torch.zeros(rgb.shape[0], rgb.shape[1]).cuda()
-    disparity_mask = torch.ones(rgb.shape[0], rgb.shape[1]).cuda()
-
-    disparity = differentiable_disparity_calculating(rgb[:,:, 0], proj, kernel_size, softargmax_beta, cost_volume_threshold)
-    # print(disparity)
+    
+    camera_image = torch.ones(100, 200).cuda()
+    camera_image.requires_grad_(True)
+    camera_image_patches = extract_image_patch_pytoch(
+        camera_image.unsqueeze(0).unsqueeze(0),
+        kernel = kernel_size,
+        stride = 1,
+        pad = int((kernel_size - 1) / 2)
+    ).squeeze(0).squeeze(0)
+    camera_image_patches.backward(torch.ones_like(camera_image_patches))
+    import ipdb; ipdb.set_trace()
+    pass
 
 
