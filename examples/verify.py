@@ -65,33 +65,30 @@ def cuda_cost_volume_backward(
     # camera_image_patches.retain_grad()
 
     with custma.Timer("cuda forward time: {:.6f}s"):
-        # cost_volume = custma.stereo_matching(
-        #     camera_image.contiguous(), projector_image.contiguous(), 200, kernel_size
-        # )
-        ex2, ey2, exy, ex2_mean, ey2_mean, cost_volume = _C.stereo_matching_forward(
+        cost_volume = custma.stereo_matching(
             camera_image.contiguous(), projector_image.contiguous(), 0, kernel_size
         )
-        # ex2 = custma.stereo_matching(
+        # ex2, ey2, exy, ex2_mean, ey2_mean, cost_volume = _C.stereo_matching_forward(
         #     camera_image.contiguous(), projector_image.contiguous(), 0, kernel_size
         # )
-    # with custma.Timer("cuda backward time: {:.6f}s"):
-    #     cost_volume.backward(torch.ones_like(cost_volume))
+    with custma.Timer("cuda backward time: {:.6f}s"):
+        cost_volume.backward(torch.ones_like(cost_volume))
 
-    # print("Cost Volume shape:", cost_volume.shape)
-    # # Detach To Calculate Cost Volume Mask
-    # cost_volume_max, _ = torch.max(
-    #     cost_volume.detach().contiguous().reshape(H * W, -1), dim=-1
-    # )
-    # cost_volume_max = cost_volume_max.reshape(H, W)
-    # cost_volume_mask = torch.where(
-    #     cost_volume_max > cost_volume_threshold,
-    #     torch.ones_like(cost_volume_max),
-    #     torch.zeros_like(cost_volume_max),
-    # )
+    print("Cost Volume shape:", cost_volume.shape)
+    # Detach To Calculate Cost Volume Mask
+    cost_volume_max, _ = torch.max(
+        cost_volume.detach().contiguous().reshape(H * W, -1), dim=-1
+    )
+    cost_volume_max = cost_volume_max.reshape(H, W)
+    cost_volume_mask = torch.where(
+        cost_volume_max > cost_volume_threshold,
+        torch.ones_like(cost_volume_max),
+        torch.zeros_like(cost_volume_max),
+    )
 
     # cv2.imwrite(os.path.join(os.path.dirname(__file__), "temp.png"), np.array(cost_volume_mask.cpu()) * 255)
 
-    return ex2, ey2, exy, ex2_mean, ey2_mean, cost_volume
+    return cost_volume, camera_image.grad
 
 
 def torch_cost_volume_backward(
@@ -196,7 +193,7 @@ if __name__ == "__main__":
     disparity_mask = torch.ones(rgb.shape[0], rgb.shape[1]).cuda()
 
     with custma.Timer("cuda time: {:.6f}s"):
-        ex2, ey2, exy, ex2_mean, ey2_mean, cost_volume = cuda_cost_volume_backward(
+        cost_volume, cuda_camera_image_grad  = cuda_cost_volume_backward(
             rgb[:, :, 0], proj, kernel_size, softargmax_beta, cost_volume_threshold
         )
     with custma.Timer("torch time: {:.6f}s"):
@@ -210,6 +207,6 @@ if __name__ == "__main__":
     EY2_MEAN = EY2_MEAN.squeeze()
     
     import ipdb; ipdb.set_trace()
-    # print(cuda_camera_image_grad)
+    print(cuda_camera_image_grad)
     print(torch_camera_image_grad)
     # print(disparity)

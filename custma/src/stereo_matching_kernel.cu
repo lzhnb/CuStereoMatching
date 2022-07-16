@@ -284,10 +284,6 @@ vector<Tensor> stereo::stereo_matching_forward_wrapper(
 ) {
     const int32_t H = camera.size(0), W = camera.size(1);
     const int32_t crop_w = W - D;
-    
-    // const int32_t ex2_elements = H * crop_w * kernel_size * kernel_size;
-    // const int32_t ex2_blocks = H * crop_w;
-
     /* self cov */
     Tensor ex2_mean_buffer = torch::zeros({H, crop_w},
             torch::TensorOptions().dtype(torch::kFloat).device(torch::kCUDA));
@@ -358,28 +354,6 @@ vector<Tensor> stereo::stereo_matching_forward_wrapper(
         // output
         cost_volume.data_ptr<float>()
     );
-
-    // // const int32_t elements = H * crop_w * (D + 1), threads = 1024;
-    // const int32_t elements = H * W * W, threads = 1024;
-    // const int32_t blocks = ceil((elements - 1) / threads) + 1;
-
-    // // Tensor cost_volume = torch::zeros({H, crop_w, D + 1},
-    // //         torch::TensorOptions().dtype(torch::kFloat).device(torch::kCUDA));
-
-    // Tensor cost_volume = torch::zeros({H, W, W},
-    //         torch::TensorOptions().dtype(torch::kFloat).device(torch::kCUDA));
-
-    // forward_cost_volume_kernel<<<blocks, threads>>>(
-    //     elements,
-    //     H,
-    //     W,
-    //     D,
-    //     kernel_size,
-    //     camera.data_ptr<float>(),
-    //     projector.data_ptr<float>(),
-    //     // output
-    //     cost_volume.data_ptr<float>()
-    // );
     
     vector<Tensor> results(6);
 
