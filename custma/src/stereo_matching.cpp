@@ -13,7 +13,7 @@ void stereo::centerize_patches(Tensor& patches    // [H, W, p_h * p_w]
 }
 
 
-Tensor stereo::stereo_matching_forward(
+vector<Tensor> stereo::stereo_matching_forward(
     const Tensor& camera,    // [H, W]
     const Tensor& projector, // [H, W]
     const int32_t D,
@@ -31,14 +31,13 @@ Tensor stereo::stereo_matching_forward(
             torch::TensorOptions().dtype(torch::kFloat).device(torch::kCUDA));
 
     // forward
-    Tensor cost_volume = stereo_matching_forward_wrapper(
+    return stereo_matching_forward_wrapper(
         camera,
         projector,
         D,
         kernel_size,
         disparity
     );
-    return cost_volume;
 }
 
 
