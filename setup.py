@@ -31,7 +31,7 @@ def get_extensions():
             name="custma.src",
             sources=[
                 "custma/src/bindings.cpp",
-                # "custma/src/stereo_matching.cpp",
+                "custma/src/verify_kernel.cu",
                 "custma/src/stereo_matching_kernel.cu",
             ],
             include_dirs=[os.path.join(ROOT_DIR, "custma", "include")],

@@ -60,27 +60,26 @@ def cuda_cost_volume_backward(
     exy_grad = torch.zeros_like(exy)
 
     with custma.Timer("cuda forward time: {:.6f}s"):
-        import ipdb; ipdb.set_trace()
-        cost_volume = custma.stereo_matching(
-            camera_image.contiguous(), projector_image.contiguous(), 0, kernel_size
-        )
-        # ex2, ey2, exy, ex2_mean, ey2_mean, cost_volume = _C.stereo_matching_forward(
+        # cost_volume = custma.stereo_matching(
         #     camera_image.contiguous(), projector_image.contiguous(), 0, kernel_size
         # )
+        ex2, ey2, exy, ex2_mean, ey2_mean, cost_volume = _C.stereo_matching_forward(
+            camera_image.contiguous(), projector_image.contiguous(), 0, kernel_size
+        )
     with custma.Timer("cuda backward time: {:.6f}s"):
-        cost_volume.backward(torch.ones_like(cost_volume))
-        camera_grad = torch.zeros_like(camera_image)
-        # ex2_grad, exy_grad, camera_grad = _C.stereo_matching_backward(
-        #     torch.ones_like(cost_volume),
-        #     camera_image.contiguous(),
-        #     projector_image.contiguous(),
-        #     ex2,
-        #     ey2,
-        #     exy,
-        #     ex2_mean,
-        #     ey2_mean,
-        #     kernel_size,
-        # )
+        # cost_volume.backward(torch.ones_like(cost_volume))
+        camera_grad = camera_image.grad
+        ex2_grad, exy_grad, camera_grad = _C.stereo_matching_backward(
+            torch.ones_like(cost_volume),
+            camera_image.contiguous(),
+            projector_image.contiguous(),
+            ex2,
+            ey2,
+            exy,
+            ex2_mean,
+            ey2_mean,
+            kernel_size,
+        )
         # camera_grad = _C.exy_grad_to_image(torch.ones_like(exy), camera_image.contiguous(), projector_image.contiguous(), ey2_mean, kernel_size)
         # camera_grad = _C.ex2_grad_to_image(torch.ones_like(ex2), camera_image.contiguous(), ex2_mean, kernel_size)
 
@@ -98,7 +97,7 @@ def cuda_cost_volume_backward(
 
     # cv2.imwrite(os.path.join(os.path.dirname(__file__), "temp.png"), np.array(cost_volume_mask.cpu()) * 255)
 
-    return cost_volume, camera_image.grad, ex2, ey2, exy, ex2_grad, exy_grad
+    return cost_volume, camera_grad, ex2, ey2, exy, ex2_grad, exy_grad
 
 
 def torch_cost_volume_backward(
@@ -166,9 +165,8 @@ def torch_cost_volume_backward(
         cost_volume = (EXY + eps) / (torch.sqrt(EX2 * EY2 + eps))
 
     # camera_img_patches_mean.retain_grad()
-    # EX2.retain_grad()
-    # EY2.retain_grad()
-    # EXY.retain_grad()
+    EX2.retain_grad()
+    EXY.retain_grad()
     with custma.Timer("torch backward time: {:.6f}s"):
         cost_volume.backward(torch.ones_like(cost_volume))
         camera_image_grad = camera_image.grad
@@ -227,6 +225,7 @@ if __name__ == "__main__":
         cost_volume, cuda_img_grad, ex2, ey2, exy, ex2_grad, exy_grad = cuda_cost_volume_backward(
             rgb[:, :, 0], proj, kernel_size, softargmax_beta, cost_volume_threshold
         )
+
     with custma.Timer("torch time: {:.6f}s"):
         (
             EX2,
@@ -240,9 +239,8 @@ if __name__ == "__main__":
             rgb[:, :, 0], proj, kernel_size, softargmax_beta, cost_volume_threshold
         )
 
-    # EX2_GRAD = EX2.grad.squeeze()
-    # EY2_GRAD = EY2.grad.squeeze()
-    # EXY_GRAD = EXY.grad.squeeze()
+    EX2_GRAD = EX2.grad.squeeze()
+    EXY_GRAD = EXY.grad.squeeze()
     EX2 = EX2.squeeze()
     EY2 = EY2.squeeze()
     EXY = EXY.squeeze()
@@ -252,8 +250,9 @@ if __name__ == "__main__":
     print(f"ex2 error: {(ex2 - EX2).abs().max()}")
     print(f"ey2 error: {(ey2 - EY2).abs().max()}")
     print(f"exy error: {(exy - EXY).abs().max()}")
+    print(f"ex2_grad error: {(ex2_grad - EX2_GRAD).abs().max()}")
+    print(f"exy_grad error: {(exy_grad - EXY_GRAD).abs().max()}")
     print(f"img_grad error: {(cuda_img_grad - torch_img_grad).abs().max()}")
     import ipdb; ipdb.set_trace()
     print(cuda_img_grad)
     print(torch_img_grad)
-    # print(disparity)

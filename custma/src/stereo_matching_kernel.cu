@@ -1,6 +1,7 @@
 // Copyright 2022 Zhihao Liang
 #include "stereo_matching.hpp"
 
+/* NOTE: now ignore the crop_w and D */
 const float EPSILON = 1e-8;
 
 __device__ float query_ij(
@@ -11,8 +12,6 @@ __device__ float query_ij(
     const int32_t j) {
     return (i < 0 || i >= H || j < 0 || j >= W) ? 0.f : val_ptr[i * W + j];
 }
-
-/* NOTE: now ignore the crop_w and D */
 
 // KERNELS
 __global__ void self_cov_kernel(
@@ -47,7 +46,6 @@ __global__ void self_cov_kernel(
 }
 
 __global__ void cross_cov_kernel(
-    const int32_t elements,
     const int32_t H,
     const int32_t W,
     const int32_t D,
@@ -59,34 +57,28 @@ __global__ void cross_cov_kernel(
     // output
     float* __restrict__ cross_cov_ptr // [H, W - D, W]
 ) {
-    const int32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
-    if (tid >= elements) {
-        return;
-    }
     // the coordinate of pixel
-    const int32_t d_idx = tid % W;
-    const int32_t w_idx = (tid / W) % (W - D);
-    const int32_t h_idx = tid / (W * (W - D));
+    const int32_t h_idx = blockIdx.x;
+    const int32_t w_idx = blockIdx.y;
+    const int32_t d_idx = blockIdx.z;
+    // relative coordinate in the patch
+    const int32_t i = threadIdx.x;
+    const int32_t j = threadIdx.y;
 
     const float cam_mean = cam_mean_buffer[h_idx * (W - D) + w_idx];
     const float proj_mean = proj_mean_buffer[h_idx * W + d_idx];
-#pragma unroll
-    for (int32_t i = 0; i < kernel_size; ++i) {
-        for (int32_t j = 0; j < kernel_size; ++j) {
-            const int32_t cam_patch_i = h_idx + i - kernel_size / 2;
-            const int32_t cam_patch_j = w_idx + D + j - kernel_size / 2;
-            const float cam_val =
-                query_ij(cam_ptr, H, W, cam_patch_i, cam_patch_j) - cam_mean;
+    const int32_t cam_patch_i = h_idx + i - kernel_size / 2;
+    const int32_t cam_patch_j = w_idx + D + j - kernel_size / 2;
+    const float cam_val =
+        query_ij(cam_ptr, H, W, cam_patch_i, cam_patch_j) - cam_mean;
 
-            const int32_t proj_patch_i = h_idx + i - kernel_size / 2;
-            const int32_t proj_patch_j = d_idx + j - kernel_size / 2;
-            const float proj_val =
-                query_ij(proj_ptr, H, W, proj_patch_i, proj_patch_j) -
-                proj_mean;
+    const int32_t proj_patch_i = h_idx + i - kernel_size / 2;
+    const int32_t proj_patch_j = d_idx + j - kernel_size / 2;
+    const float proj_val =
+        query_ij(proj_ptr, H, W, proj_patch_i, proj_patch_j) -
+        proj_mean;
 
-            cross_cov_ptr[tid] += cam_val * proj_val;
-        }
-    }
+    atomicAdd(&cross_cov_ptr[h_idx * (W - D) * W + w_idx * W + d_idx], cam_val * proj_val);
 }
 
 __global__ void cost_volume_kernel(
@@ -189,13 +181,13 @@ __global__ void get_cross_grad_kernel(
     const float temp_exy_grad = temp_cost_volume_grad / factor;
     exy_grad_ptr[tid] = temp_exy_grad;
     const float temp_ex2_grad = -ey2_ptr[h_idx * W + d_idx] *
-        (exy_ptr[tid] + EPSILON) / (2 * powf(factor, 3));
+        (exy + EPSILON) / (2 * powf(factor, 3));
     atomicAdd(&ex2_grad_ptr[h_idx * (W - D) + w_idx], temp_ex2_grad);
     __syncthreads();
 }
 
 
-__global__ void exy_grad_to_image_kernel(
+__global__ void exy_grad_to_image_kernel2(
     const int32_t H,
     const int32_t W,
     const int32_t D,
@@ -235,14 +227,14 @@ __global__ void exy_grad_to_image_kernel(
 }
 
 
-__global__ void ex2_grad_to_image_kernel(
+__global__ void ex2_grad_to_image_kernel2(
     const int32_t H,
     const int32_t W,
     const int32_t D,
     const int32_t kernel_size,
-    const float* __restrict__ ex2_grad_ptr, // [H, W - D, W]
+    const float* __restrict__ ex2_grad_ptr, // [H, W - D]
     const float* __restrict__ camera_ptr, // [H, W]
-    const float* __restrict__ ex2_mean_ptr, // [H, W]
+    const float* __restrict__ ex2_mean_ptr, // [H, W - D]
     // output
     float* __restrict__ camera_grad_ptr // [H, W]
 ) {
@@ -262,7 +254,7 @@ __global__ void ex2_grad_to_image_kernel(
     }
     atomicAdd(
         &camera_grad_ptr[patch_i * W + patch_j],
-        2 * (val - ex2_mean_ptr[h_idx * (W - D) + w_idx]));
+        2 * (val - ex2_mean_ptr[h_idx * (W - D) + w_idx]) * ex2_grad_ptr[h_idx * (W - D) + w_idx]);
     __syncthreads();
 }
 
@@ -324,12 +316,10 @@ vector<Tensor> stereo::stereo_matching_forward(
     Tensor exy = torch::zeros(
         {H, crop_w, W},
         torch::TensorOptions().dtype(torch::kFloat).device(torch::kCUDA));
-    const int32_t elements = H * crop_w * W, threads = 1024;
-    const int32_t blocks = ceil((elements - 1) / threads) + 1;
 
     // NOTE: atomicAdd is too slow for sync while the blocks are too many
-    cross_cov_kernel<<<blocks, threads>>>(
-        elements,
+    dim3 exy_dim_grid(H, crop_w, W);
+    cross_cov_kernel<<<exy_dim_grid, dim_block>>>(
         H,
         W,
         0,
@@ -344,6 +334,9 @@ vector<Tensor> stereo::stereo_matching_forward(
     Tensor cost_volume = torch::zeros(
         {H, crop_w, W},
         torch::TensorOptions().dtype(torch::kFloat).device(torch::kCUDA));
+
+    const int32_t elements = H * crop_w * W, threads = 1024;
+    const int32_t blocks = ceil((elements - 1) / threads) + 1;
     cost_volume_kernel<<<blocks, threads>>>(
         elements,
         H,
@@ -396,8 +389,10 @@ vector<Tensor> stereo::stereo_matching_backward(
     Tensor exy_grad = torch::zeros_like(exy);
     Tensor camera_grad = torch::zeros_like(camera);
 
+    // ex2 term
     const int32_t elements = H * crop_w * W, threads = 1024;
     const int32_t blocks = ceil((elements - 1) / threads) + 1;
+
     get_cross_grad_kernel<<<blocks, threads>>>(
         elements,
         H,
@@ -419,7 +414,7 @@ vector<Tensor> stereo::stereo_matching_backward(
     // exy term
     dim3 dim_block(kernel_size, kernel_size);
     dim3 exy_dim_grid(H, crop_w, W);
-    exy_grad_to_image_kernel<<<exy_dim_grid, dim_block>>>(
+    exy_grad_to_image_kernel2<<<exy_dim_grid, dim_block>>>(
         H,
         W,
         D,
@@ -432,7 +427,7 @@ vector<Tensor> stereo::stereo_matching_backward(
 
     // ex2 term
     dim3 ex2_dim_grid(H, crop_w);
-    ex2_grad_to_image_kernel<<<ex2_dim_grid, dim_block>>>(
+    ex2_grad_to_image_kernel2<<<ex2_dim_grid, dim_block>>>(
         H,
         W,
         D,
@@ -450,84 +445,4 @@ vector<Tensor> stereo::stereo_matching_backward(
     results[2] = camera_grad;
 
     return results;
-}
-
-Tensor stereo::exy_grad_to_image(
-    const Tensor& exy_grad, // [H, W - D, W]
-    const Tensor& camera, // [H, W]
-    const Tensor& projector, // [H, W]
-    const Tensor& ey2_mean, // [H, W]
-    const int32_t kernel_size) {
-    // check
-    CHECK_INPUT(exy_grad);
-    CHECK_INPUT(camera);
-    CHECK_INPUT(projector);
-    CHECK_INPUT(ey2_mean);
-
-    // get parameters
-    const int32_t H = camera.size(0), W = camera.size(1),
-                  crop_w = exy_grad.size(1);
-    const int32_t D = W - crop_w;
-
-    Tensor camera_grad = torch::zeros_like(camera);
-    // Tensor camera_mean_grad = torch::zeros(
-    //     {H, crop_w},
-    //     torch::TensorOptions().dtype(torch::kFloat).device(torch::kCUDA));
-
-    const int32_t elements = H * crop_w * W * kernel_size * kernel_size, threads = 1024;
-    const int32_t blocks = ceil((elements - 1) / threads) + 1;
-    
-    dim3 dim_block(kernel_size, kernel_size);
-    dim3 exy_dim_grid(H, crop_w, W);
-    exy_grad_to_image_kernel<<<exy_dim_grid, dim_block>>>(
-        H,
-        W,
-        D,
-        kernel_size,
-        exy_grad.data_ptr<float>(),
-        projector.data_ptr<float>(),
-        ey2_mean.data_ptr<float>(),
-        // output
-        camera_grad.data_ptr<float>());
-
-    return camera_grad;
-}
-
-
-Tensor stereo::ex2_grad_to_image(
-    const Tensor& ex2_grad, // [H, W - D]
-    const Tensor& camera, // [H, W]
-    const Tensor& ex2_mean, // [H, W - D]
-    const int32_t kernel_size) {
-    // check
-    CHECK_INPUT(ex2_grad);
-    CHECK_INPUT(camera);
-    CHECK_INPUT(ex2_mean);
-
-    // get parameters
-    const int32_t H = camera.size(0), W = camera.size(1),
-                  crop_w = ex2_mean.size(1);
-    const int32_t D = W - crop_w;
-
-    Tensor camera_grad = torch::zeros_like(camera);
-    // Tensor camera_mean_grad = torch::zeros(
-    //     {H, crop_w},
-    //     torch::TensorOptions().dtype(torch::kFloat).device(torch::kCUDA));
-
-    dim3 dim_block(kernel_size, kernel_size);
-    dim3 ex2_dim_grid(H, crop_w);
-    ex2_grad_to_image_kernel<<<ex2_dim_grid, dim_block>>>(
-        H,
-        W,
-        D,
-        kernel_size,
-        ex2_grad.data_ptr<float>(),
-        camera.data_ptr<float>(),
-        ex2_mean.data_ptr<float>(),
-        // output
-        camera_grad.data_ptr<float>());
-
-    // printf("\ncamera_grad-{0, 0}: %f (refer to 136.4016)\n\n",
-    // camera_grad.index({0, 0}).item<float>());
-    return camera_grad;
 }
