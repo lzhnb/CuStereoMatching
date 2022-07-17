@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import re
 from time import time
+from typing import Any
 
 
 class TimerError(Exception):
@@ -33,8 +34,9 @@ class Timer:
         >>> print(timer.since_start())
         1.000
     """
-    def __init__(self, print_tmpl=None, start=True):
+    def __init__(self, print_tmpl: str=None, start: bool=True, not_print: bool=False) -> None:
         self._is_running = False
+        self.not_print = not_print
         if (print_tmpl
                 is not None) and not re.findall(r"({:.*\df})", print_tmpl):
             print_tmpl += " {:.3f}"
@@ -44,26 +46,27 @@ class Timer:
             self.start()
 
     @property
-    def is_running(self):
+    def is_running(self) -> bool:
         """bool: indicate whether the timer is running"""
         return self._is_running
 
-    def __enter__(self):
+    def __enter__(self) -> "Timer":
         self.start()
         return self
 
-    def __exit__(self, type, value, traceback):
-        print(self.print_tmpl.format(self.since_last_check()))
+    def __exit__(self, type: Any, value: Any, traceback: Any) -> None:
+        if not self.not_print:
+            print(self.print_tmpl.format(self.since_last_check()))
         self._is_running = False
 
-    def start(self):
+    def start(self) -> None:
         """Start the timer."""
         if not self._is_running:
             self._t_start = time()
             self._is_running = True
         self._t_last = time()
 
-    def since_start(self):
+    def since_start(self) -> None:
         """Total time since the timer is started.
         Returns:
             float: Time in seconds.
@@ -73,7 +76,7 @@ class Timer:
         self._t_last = time()
         return self._t_last - self._t_start
 
-    def since_last_check(self):
+    def since_last_check(self) -> float:
         """Time since the last checking.
         Either :func:`since_start` or :func:`since_last_check` is a checking
         operation.

@@ -23,7 +23,8 @@ vector<Tensor> stereo_matching_backward(
     const Tensor&,
     const Tensor&,
     const Tensor&,
-    const int32_t);
+    const int32_t,
+    const bool);
 // use to verify the backward
 Tensor exy_grad_to_image(
     const Tensor&,

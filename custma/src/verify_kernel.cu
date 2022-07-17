@@ -10,7 +10,6 @@
 //     return (i < 0 || i >= H || j < 0 || j >= W) ? 0.f : val_ptr[i * W + j];
 // }
 
-
 __global__ void exy_grad_to_image_kernel(
     const int32_t H,
     const int32_t W,
@@ -30,25 +29,26 @@ __global__ void exy_grad_to_image_kernel(
     const int32_t i = threadIdx.x;
     const int32_t j = threadIdx.y;
 
-    const float temp_exy_grad = exy_grad_ptr[h_idx * (W - D) * W + w_idx * W + d_idx];
+    const float exy_grad =
+        exy_grad_ptr[h_idx * (W - D) * W + w_idx * W + d_idx];
 
     const int32_t cam_patch_i = h_idx + i - kernel_size / 2;
     const int32_t cam_patch_j = w_idx + D + j - kernel_size / 2;
     const int32_t proj_patch_i = h_idx + i - kernel_size / 2;
     const int32_t proj_patch_j = d_idx + j - kernel_size / 2;
-    const float temp_proj = (proj_patch_i < 0 || proj_patch_i >= H || proj_patch_j < 0 || proj_patch_j >= W) ? 0.f : projector_ptr[proj_patch_i * W + proj_patch_j];
-    const float temp_grad =
-        (temp_proj - ey2_mean_ptr[h_idx * W + d_idx]) * temp_exy_grad;
+    const float proj_val = (proj_patch_i < 0 || proj_patch_i >= H ||
+                            proj_patch_j < 0 || proj_patch_j >= W)
+        ? 0.f
+        : projector_ptr[proj_patch_i * W + proj_patch_j];
+    const float grad = (proj_val - ey2_mean_ptr[h_idx * W + d_idx]) * exy_grad;
 
     if (cam_patch_i < 0 || cam_patch_i >= H || cam_patch_j < 0 ||
         cam_patch_j >= W) {
         return;
     }
-    atomicAdd(
-        &camera_grad_ptr[cam_patch_i * W + cam_patch_j], temp_grad);
+    atomicAdd(&camera_grad_ptr[cam_patch_i * W + cam_patch_j], grad);
     __syncthreads();
 }
-
 
 __global__ void ex2_grad_to_image_kernel(
     const int32_t H,
@@ -70,17 +70,20 @@ __global__ void ex2_grad_to_image_kernel(
 
     const int32_t patch_i = h_idx + i - kernel_size / 2;
     const int32_t patch_j = w_idx + D + j - kernel_size / 2;
-    const float val = (patch_i < 0 || patch_i >= H || patch_j < 0 || patch_j >= W) ? 0.f : camera_ptr[patch_i * W + patch_j];
+    const float val =
+        (patch_i < 0 || patch_i >= H || patch_j < 0 || patch_j >= W)
+        ? 0.f
+        : camera_ptr[patch_i * W + patch_j];
 
     if (patch_i < 0 || patch_i >= H || patch_j < 0 || patch_j >= W) {
         return;
     }
     atomicAdd(
         &camera_grad_ptr[patch_i * W + patch_j],
-        2 * (val - ex2_mean_ptr[h_idx * (W - D) + w_idx]) * ex2_grad_ptr[h_idx * (W - D) + w_idx]);
+        2 * (val - ex2_mean_ptr[h_idx * (W - D) + w_idx]) *
+            ex2_grad_ptr[h_idx * (W - D) + w_idx]);
     __syncthreads();
 }
-
 
 Tensor stereo::exy_grad_to_image(
     const Tensor& exy_grad, // [H, W - D, W]
@@ -100,7 +103,7 @@ Tensor stereo::exy_grad_to_image(
     const int32_t D = W - crop_w;
 
     Tensor camera_grad = torch::zeros_like(camera);
-    
+
     dim3 dim_block(kernel_size, kernel_size);
     dim3 exy_dim_grid(H, crop_w, W);
     exy_grad_to_image_kernel<<<exy_dim_grid, dim_block>>>(
@@ -116,7 +119,6 @@ Tensor stereo::exy_grad_to_image(
 
     return camera_grad;
 }
-
 
 Tensor stereo::ex2_grad_to_image(
     const Tensor& ex2_grad, // [H, W - D]
@@ -155,5 +157,3 @@ Tensor stereo::ex2_grad_to_image(
     // camera_grad.index({0, 0}).item<float>());
     return camera_grad;
 }
-
-

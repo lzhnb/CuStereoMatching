@@ -13,9 +13,10 @@ class _StereoMatching(torch.autograd.Function):
         projector_image: torch.Tensor,  # [H, W]
         D: int,
         kernel_size: int,
+        record: bool=False
     ) -> torch.Tensor:
-        ctx.D = D
         ctx.kernel_size = kernel_size
+        ctx.record = record
         ex2, ey2, exy, ex2_mean, ey2_mean, cost_volume = stereo_matching_forward(
             camera_image, projector_image, D, kernel_size
         )
@@ -37,7 +38,8 @@ class _StereoMatching(torch.autograd.Function):
             ey2_mean,
         ) = ctx.saved_tensors
         kernel_size = ctx.kernel_size
-        ex2_grad, exy_grad, camera_grad = stereo_matching_backward(
+        record = ctx.record
+        camera_grad, _, _ = stereo_matching_backward(
             cost_volume_grad,
             camera_image,
             projector_image,
@@ -47,8 +49,9 @@ class _StereoMatching(torch.autograd.Function):
             ex2_mean,
             ey2_mean,
             kernel_size,
+            record
         )
-        return camera_grad, None, None, None
+        return camera_grad, None, None, None, None
 
 
 stereo_matching = _StereoMatching.apply
