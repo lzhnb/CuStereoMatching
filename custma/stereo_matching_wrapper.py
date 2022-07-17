@@ -37,10 +37,18 @@ class _StereoMatching(torch.autograd.Function):
             ey2_mean,
         ) = ctx.saved_tensors
         kernel_size = ctx.kernel_size
-        stereo_matching_backward_grad = stereo_matching_backward(
-            cost_volume_grad, camera_image, projector_image, kernel_size
+        ex2_grad, exy_grad, camera_grad = stereo_matching_backward(
+            cost_volume_grad,
+            camera_image,
+            projector_image,
+            ex2,
+            ey2,
+            exy,
+            ex2_mean,
+            ey2_mean,
+            kernel_size,
         )
-        return stereo_matching_backward_grad, None, None, None
+        return camera_grad, None, None, None
 
 
 stereo_matching = _StereoMatching.apply

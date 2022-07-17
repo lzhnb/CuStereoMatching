@@ -1,4 +1,5 @@
 import os
+from re import M
 
 import cv2
 import numpy as np
@@ -49,30 +50,32 @@ def cuda_cost_volume_backward(
 ) -> torch.Tensor:
 
     camera_image.requires_grad_(True)
-    # camera_image_patches = extract_image_patch_pytoch(
-    #     camera_image.unsqueeze(0).unsqueeze(0),
-    #     kernel = kernel_size,
-    #     stride = 1,
-    #     pad = int((kernel_size - 1) / 2)
-    # ).squeeze(0).squeeze(0)
-
-    # projector_image_patches = extract_image_patch_pytoch(
-    #     projector_image.unsqueeze(0).unsqueeze(0),
-    #     kernel = kernel_size,
-    #     stride = 1,
-    #     pad = int((kernel_size - 1) / 2)
-    # ).squeeze(0).squeeze(0)
-    # camera_image_patches.retain_grad()
 
     with custma.Timer("cuda forward time: {:.6f}s"):
         cost_volume = custma.stereo_matching(
             camera_image.contiguous(), projector_image.contiguous(), 0, kernel_size
         )
-        # ex2, ey2, exy, ex2_mean, ey2_mean, cost_volume = _C.stereo_matching_forward(
-        #     camera_image.contiguous(), projector_image.contiguous(), 0, kernel_size
-        # )
+        ex2, ey2, exy, ex2_mean, ey2_mean, cost_volume = _C.stereo_matching_forward(
+            camera_image.contiguous(), projector_image.contiguous(), 0, kernel_size
+        )
     with custma.Timer("cuda backward time: {:.6f}s"):
-        cost_volume.backward(torch.ones_like(cost_volume))
+        # cost_volume.backward(torch.ones_like(cost_volume))
+        ex2_grad = torch.zeros_like(ex2)
+        exy_grad = torch.zeros_like(exy)
+        camera_grad = torch.zeros_like(camera_image)
+        ex2_grad, exy_grad, camera_grad = _C.stereo_matching_backward(
+            torch.ones_like(cost_volume),
+            camera_image.contiguous(),
+            projector_image.contiguous(),
+            ex2,
+            ey2,
+            exy,
+            ex2_mean,
+            ey2_mean,
+            kernel_size,
+        )
+        # camera_grad = _C.exy_grad_to_image(torch.ones_like(exy), camera_image.contiguous(), projector_image.contiguous(), ey2_mean, kernel_size)
+        # camera_grad = _C.ex2_grad_to_image(torch.ones_like(ex2), camera_image.contiguous(), ex2_mean, kernel_size)
 
     print("Cost Volume shape:", cost_volume.shape)
     # Detach To Calculate Cost Volume Mask
@@ -88,7 +91,7 @@ def cuda_cost_volume_backward(
 
     # cv2.imwrite(os.path.join(os.path.dirname(__file__), "temp.png"), np.array(cost_volume_mask.cpu()) * 255)
 
-    return cost_volume, camera_image.grad
+    return cost_volume, camera_grad, ex2, ey2, exy, ex2_grad, exy_grad
 
 
 def torch_cost_volume_backward(
@@ -111,7 +114,7 @@ def torch_cost_volume_backward(
             .squeeze(0)
             .squeeze(0)
         )
-        camera_img_patches_.retain_grad()
+        # camera_img_patches_.retain_grad()
 
         projector_img_patches = (
             extract_image_patch_pytoch(
@@ -155,8 +158,21 @@ def torch_cost_volume_backward(
         )
         cost_volume = (EXY + eps) / (torch.sqrt(EX2 * EY2 + eps))
 
+    # camera_img_patches_mean.retain_grad()
+    # EX2.retain_grad()
+    # EY2.retain_grad()
+    # EXY.retain_grad()
     with custma.Timer("torch backward time: {:.6f}s"):
         cost_volume.backward(torch.ones_like(cost_volume))
+        camera_image_grad = camera_image.grad
+        # camera_image_grad = torch.autograd.grad(
+        #     EX2,
+        #     camera_image,
+        #     torch.ones_like(EX2),
+        #     create_graph=True,
+        #     retain_graph=True,
+        #     only_inputs=True
+        # )[0]
 
     # print("Cost Volume shape:", cost_volume.shape)
     # # Detach To Calculate Cost Volume Mask
@@ -166,7 +182,15 @@ def torch_cost_volume_backward(
 
     # cv2.imwrite(os.path.join(os.path.dirname(__file__), "temp_torch.png"), np.array(cost_volume_mask.cpu()) * 255)
 
-    return EX2, EY2, EXY, camera_img_patches_mean, projector_img_patches_mean, cost_volume, camera_image.grad
+    return (
+        EX2,
+        EY2,
+        EXY,
+        camera_img_patches_mean,
+        projector_img_patches_mean,
+        cost_volume,
+        camera_image_grad,
+    )
 
 
 if __name__ == "__main__":
@@ -193,20 +217,36 @@ if __name__ == "__main__":
     disparity_mask = torch.ones(rgb.shape[0], rgb.shape[1]).cuda()
 
     with custma.Timer("cuda time: {:.6f}s"):
-        cost_volume, cuda_camera_image_grad  = cuda_cost_volume_backward(
+        cost_volume, cuda_img_grad, ex2, ey2, exy, ex2_grad, exy_grad = cuda_cost_volume_backward(
             rgb[:, :, 0], proj, kernel_size, softargmax_beta, cost_volume_threshold
         )
     with custma.Timer("torch time: {:.6f}s"):
-        EX2, EY2, EXY, EX2_MEAN, EY2_MEAN, torch_cost_volume, torch_camera_image_grad = torch_cost_volume_backward(
+        (
+            EX2,
+            EY2,
+            EXY,
+            EX2_MEAN,
+            EY2_MEAN,
+            torch_cost_volume,
+            torch_img_grad,
+        ) = torch_cost_volume_backward(
             rgb[:, :, 0], proj, kernel_size, softargmax_beta, cost_volume_threshold
         )
 
+    # EX2_GRAD = EX2.grad.squeeze()
+    # EY2_GRAD = EY2.grad.squeeze()
+    # EXY_GRAD = EXY.grad.squeeze()
     EX2 = EX2.squeeze()
     EY2 = EY2.squeeze()
+    EXY = EXY.squeeze()
     EX2_MEAN = EX2_MEAN.squeeze()
     EY2_MEAN = EY2_MEAN.squeeze()
-    
+
+    print(f"ex2 error: {(ex2 - EX2).abs().max()}")
+    print(f"ey2 error: {(ey2 - EY2).abs().max()}")
+    print(f"exy error: {(exy - EXY).abs().max()}")
     import ipdb; ipdb.set_trace()
-    print(cuda_camera_image_grad)
-    print(torch_camera_image_grad)
+    print(f"img_grad error: {(cuda_img_grad - torch_img_grad).abs().max()}")
+    print(cuda_img_grad)
+    print(torch_img_grad)
     # print(disparity)
