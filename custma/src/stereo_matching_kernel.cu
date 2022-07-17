@@ -179,20 +179,23 @@ __global__ void patches_grad_to_image_kernel(
 }
 
 
-Tensor stereo::stereo_matching_forward_wrapper(
+Tensor stereo::stereo_matching_forward(
     const Tensor& camera,    // [H, W]
     const Tensor& projector, // [H, W]
     const int32_t D,
-    const int32_t kernel_size,
-    // output
-    Tensor& disparity    // [H, W]
+    const int32_t kernel_size
 ) {
+    // check
+    CHECK_INPUT(camera);
+    CHECK_INPUT(projector);
 
     const int32_t H = camera.size(0), W = camera.size(1);
     // const int32_t crop_w = W - D;
     // const int32_t elements = H * crop_w * (D + 1), threads = 1024;
     const int32_t elements = H * W * W, threads = 1024;
     const int32_t blocks = ceil((elements - 1) / threads) + 1;
+    
+    assert(projector.size(0) == H && projector.size(1) == W);
 
     // Tensor cost_volume = torch::zeros({H, crop_w, D + 1},
     //         torch::TensorOptions().dtype(torch::kFloat).device(torch::kCUDA));
@@ -215,14 +218,15 @@ Tensor stereo::stereo_matching_forward_wrapper(
     return cost_volume;
 }
 
-void stereo::stereo_matching_backward_wrapper(
+Tensor stereo::stereo_matching_backward(
     const Tensor& cost_volume_grad,  // [H, crop_w, D + 1]
     const Tensor& camera,    // [H, W]
     const Tensor& projector, // [H, W]
-    const int32_t kernel_size,
-    // output
-    Tensor& camera_grad      // [H, W]
+    const int32_t kernel_size
 ) {
+    // check
+    CHECK_INPUT(cost_volume_grad);
+
     // get parameters
     const int32_t H = cost_volume_grad.size(0), W = cost_volume_grad.size(1), D = cost_volume_grad.size(2);
     // const int32_t H = cost_volume_grad.size(0), crop_w = cost_volume_grad.size(1), D = cost_volume_grad.size(2) - 1;
@@ -247,6 +251,8 @@ void stereo::stereo_matching_backward_wrapper(
         camera_patches_grad.data_ptr<float>()
     );
 
+    Tensor camera_grad = torch::zeros({H, W},
+            torch::TensorOptions().dtype(torch::kFloat).device(torch::kCUDA));
     const int32_t elements2 = H * W * kernel_size * kernel_size;
     const int32_t blocks2 = ceil((elements2 - 1) / threads) + 1;
     patches_grad_to_image_kernel<<<blocks2, threads>>>(
@@ -258,4 +264,6 @@ void stereo::stereo_matching_backward_wrapper(
         // output
         camera_grad.data_ptr<float>()
     );
+    
+    return camera_grad;
 }
