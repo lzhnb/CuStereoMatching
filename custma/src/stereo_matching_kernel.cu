@@ -267,16 +267,21 @@ __global__ void ex2_grad_to_image_kernel(
 }
 
 
-vector<Tensor> stereo::stereo_matching_forward_wrapper(
+vector<Tensor> stereo::stereo_matching_forward(
     const Tensor& camera, // [H, W]
     const Tensor& projector, // [H, W]
     const int32_t D,
-    const int32_t kernel_size,
-    // output
-    Tensor& disparity // [H, W]
+    const int32_t kernel_size
 ) {
+    // check
+    CHECK_INPUT(camera);
+    CHECK_INPUT(projector);
+
+    // get parameters
     const int32_t H = camera.size(0), W = camera.size(1);
     const int32_t crop_w = W - D;
+    assert(projector.size(0) == H && projector.size(1) == W);
+
     /* self cov */
     Tensor ex2_mean = torch::zeros(
         {H, crop_w},

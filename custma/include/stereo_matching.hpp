@@ -14,12 +14,6 @@ vector<Tensor> stereo_matching_forward(
     const Tensor&,
     const int32_t,
     const int32_t);
-vector<Tensor> stereo_matching_forward_wrapper(
-    const Tensor&,
-    const Tensor&,
-    const int32_t,
-    const int32_t,
-    Tensor&);
 vector<Tensor> stereo_matching_backward(
     const Tensor&,
     const Tensor&,
