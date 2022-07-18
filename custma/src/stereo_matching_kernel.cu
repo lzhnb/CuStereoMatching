@@ -34,7 +34,7 @@ __global__ void unfold_kernel(
     outputs_ptr[h_idx * W * off + w_idx * off + i * ks + j] = val;
 }
 
-__global__ void get_ex2_exy_grad_kernel(
+__global__ void get_ex2_grad_kernel(
     const int32_t H,
     const int32_t W,
     const int32_t D,
@@ -44,8 +44,7 @@ __global__ void get_ex2_exy_grad_kernel(
     const float* __restrict__ ey2_ptr, // [H, W]
     const float* __restrict__ exy_ptr, // [H, W - D, W]
     // output
-    float* __restrict__ ex2_grad_ptr, // [H, W - D]
-    float* __restrict__ exy_grad_ptr // [H, W - D, W]
+    float* __restrict__ ex2_grad_ptr // [H, W - D]
 ) {
     // the coordinate of pixel
     const int32_t h_idx = threadIdx.x;
@@ -61,14 +60,10 @@ __global__ void get_ex2_exy_grad_kernel(
     const float cost_volume_grad =
         cost_volume_grad_ptr[h_idx * (W - D) * W + w_idx * W + d_idx];
 
-    const float exy_grad = cost_volume_grad * deno;
-    exy_grad_ptr[h_idx * (W - D) * W + w_idx * W + d_idx] = exy_grad;
-
-    const float ex2_grad =
-        -ey2_ptr[h_idx * W + d_idx] * (exy + EPSILON) * deno3 / 2;
+    const float ex2_grad = cost_volume_grad * -ey2_ptr[h_idx * W + d_idx] *
+        (exy + EPSILON) * deno3 / 2;
     atomicAdd(&ex2_grad_ptr[h_idx * (W - D) + w_idx], ex2_grad);
 }
-
 
 __global__ void patch_grad_to_image_kernel(
     const int32_t H,
@@ -92,10 +87,9 @@ __global__ void patch_grad_to_image_kernel(
         return;
     }
     atomicAdd(
-        camera_grad_ptr + cam_i * W + cam_j,
+        &camera_grad_ptr[cam_i * W + cam_j],
         camera_patches_grad_ptr[h_idx * W * off + w_idx * off + i * ks + j]);
 }
-
 
 vector<Tensor> stereo::stereo_matching_forward(
     const Tensor& camera, // [H, W]
@@ -144,27 +138,24 @@ vector<Tensor> stereo::stereo_matching_forward(
         torch::bmm(
             camera_patch.reshape({H * W, 1, kernel_size * kernel_size}),
             camera_patch.reshape({H * W, kernel_size * kernel_size, 1}))
-            .reshape({H, W});
+            .reshape({H, W, 1});
     Tensor ey2 =
         torch::bmm(
             projector_patch.reshape({H * W, 1, kernel_size * kernel_size}),
             projector_patch.reshape({H * W, kernel_size * kernel_size, 1}))
-            .reshape({H, W});
+            .reshape({H, -1, W});
 
     Tensor exy = torch::bmm(camera_patch, projector_patch.permute({0, 2, 1}));
-    Tensor cost_volume =
-        (exy + EPSILON) / torch::sqrt(ex2 * ey2 + EPSILON).unsqueeze_(2);
 
-    vector<Tensor> results(8);
+    Tensor cost_volume =
+        (exy + EPSILON) / torch::sqrt(torch::bmm(ex2, ey2) + EPSILON);
+
+    vector<Tensor> results(4);
 
     results[0] = ex2;
     results[1] = ey2;
     results[2] = exy;
-    results[3] = camera_patch_mean;
-    results[4] = projector_patch_mean;
-    results[5] = cost_volume;
-    results[6] = camera_patch;
-    results[7] = projector_patch;
+    results[3] = cost_volume;
 
     return results;
 }
@@ -176,10 +167,7 @@ vector<Tensor> stereo::stereo_matching_backward(
     const Tensor& ex2,
     const Tensor& ey2,
     const Tensor& exy,
-    const Tensor& ex2_mean,
-    const Tensor& ey2_mean,
-    const int32_t kernel_size,
-    const bool record) {
+    const int32_t kernel_size) {
     // check
     CHECK_INPUT(cost_volume_grad);
     CHECK_INPUT(camera);
@@ -187,34 +175,27 @@ vector<Tensor> stereo::stereo_matching_backward(
     CHECK_INPUT(ex2);
     CHECK_INPUT(ey2);
     CHECK_INPUT(exy);
-    CHECK_INPUT(ex2_mean);
-    CHECK_INPUT(ey2_mean);
 
     // get parameters
     const int32_t H = camera.size(0), W = camera.size(1),
                   crop_w = cost_volume_grad.size(1);
-    const int32_t D = W - crop_w;
 
-    Tensor ex2_grad = torch::zeros_like(ex2);
-    Tensor exy_grad = torch::zeros_like(exy);
-    Tensor camera_grad = torch::zeros_like(camera);
-    Tensor camera_patch_grad = torch::zeros(
-        {H, W, kernel_size * kernel_size},
-        torch::TensorOptions().dtype(torch::kFloat).device(torch::kCUDA));
-
-    dim3 dim_grid_(crop_w, W);
-    get_ex2_exy_grad_kernel<<<dim_grid_, H>>>(
-        H,
-        W,
-        D,
-        kernel_size,
-        cost_volume_grad.data_ptr<float>(),
-        ex2.data_ptr<float>(),
-        ey2.data_ptr<float>(),
-        exy.data_ptr<float>(),
-        // output
-        ex2_grad.data_ptr<float>(),
-        exy_grad.data_ptr<float>());
+    /*
+        forward:
+        CV = (exy + EPS) / sqrt(torch::bmm(ex2, ey2) + EPS)
+        backward:
+        let `X = torch::bmm(ex2, ey2) + EPS`, so:
+        CV = (exy + EPS) / sqrt(X) -> d_CV / d_X = -1/2 * (exy + EPS) /
+       (sqrt(X))^3 d_CV / d_ex2 = (d_CV / d_X) * (d_X / d_ex2)
+     */
+    Tensor factor = torch::sqrt(torch::bmm(ex2, ey2) + EPSILON);
+    // Tensor X_grad_temp = -cost_volume_grad * (exy + EPSILON) /
+    // torch::pow(factor, 3) / 2.f; Tensor ex2_grad = torch::bmm(X_grad_temp,
+    // ey2.permute({0, 2, 1}));
+    Tensor ex2_grad = torch::bmm(
+        -cost_volume_grad * (exy + EPSILON) / torch::pow(factor, 3) / 2.f,
+        ey2.permute({0, 2, 1}));
+    Tensor exy_grad = cost_volume_grad / factor;
 
     // unfold operation
     Tensor camera_patch = torch::zeros(
@@ -240,18 +221,20 @@ vector<Tensor> stereo::stereo_matching_backward(
         projector.data_ptr<float>(),
         // output
         projector_patch.data_ptr<float>());
+
     Tensor camera_patch_mean = torch::mean(camera_patch, 2, true);
     Tensor projector_patch_mean = torch::mean(projector_patch, 2, true);
     camera_patch -= camera_patch_mean;
     projector_patch -= projector_patch_mean;
 
-    camera_patch_grad +=
+    // combine exy term and ex2 term
+    Tensor camera_patch_grad = torch::bmm(exy_grad, projector_patch) +
         torch::bmm(
             ex2_grad.reshape({H * W, 1, 1}),
             camera_patch.reshape({H * W, 1, kernel_size * kernel_size}))
             .reshape({H, W, kernel_size * kernel_size});
-    camera_patch_grad += torch::bmm(exy_grad, projector_patch);
 
+    Tensor camera_grad = torch::zeros_like(camera);
     dim3 img_dim_grid(H, W);
     patch_grad_to_image_kernel<<<img_dim_grid, dim_block>>>(
         H,

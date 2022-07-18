@@ -63,7 +63,7 @@ def cuda_cost_volume_backward(
         # cost_volume = custma.stereo_matching(
         #     camera_image.contiguous(), projector_image.contiguous(), 0, kernel_size
         # )
-        ex2, ey2, exy, ex2_mean, ey2_mean, cost_volume = _C.stereo_matching_forward(
+        ex2, ey2, exy, cost_volume = _C.stereo_matching_forward(
             camera_image.contiguous(), projector_image.contiguous(), 0, kernel_size
         )
     with custma.Timer("cuda backward time: {:.6f}s"):
@@ -77,10 +77,7 @@ def cuda_cost_volume_backward(
             ex2,
             ey2,
             exy,
-            ex2_mean,
-            ey2_mean,
-            kernel_size,
-            True
+            kernel_size
         )
         # camera_grad = _C.exy_grad_to_image(torch.ones_like(exy), camera_image.contiguous(), projector_image.contiguous(), ey2_mean, kernel_size)
         # camera_grad = _C.ex2_grad_to_image(torch.ones_like(ex2), camera_image.contiguous(), ex2_mean, kernel_size)
@@ -163,8 +160,11 @@ def torch_cost_volume_backward(
             .reshape(H, W)
             .unsqueeze(-2)
         )
-        cost_volume = (EXY + eps) / (torch.sqrt(EX2 * EY2 + eps))
+        factor = torch.bmm(EX2, EY2) + eps
+        factor.retain_grad()
+        cost_volume = (EXY + eps) / (torch.sqrt(factor))
 
+    # import ipdb; ipdb.set_trace()
     # camera_img_patches_mean.retain_grad()
     EX2.retain_grad()
     EXY.retain_grad()
@@ -192,6 +192,7 @@ def torch_cost_volume_backward(
         EX2,
         EY2,
         EXY,
+        factor.grad,
         camera_img_patches_mean,
         projector_img_patches_mean,
         cost_volume,
@@ -232,6 +233,7 @@ if __name__ == "__main__":
             EX2,
             EY2,
             EXY,
+            factor_grad,
             EX2_MEAN,
             EY2_MEAN,
             torch_cost_volume,
@@ -246,19 +248,22 @@ if __name__ == "__main__":
     EX2 = EX2.squeeze()
     EY2 = EY2.squeeze()
     EXY = EXY.squeeze()
+    ex2 = ex2.squeeze()
+    ey2 = ey2.squeeze()
+    ex2_grad = ex2_grad.squeeze()
     EX2_MEAN = EX2_MEAN.squeeze()
     EY2_MEAN = EY2_MEAN.squeeze()
 
     print(f"ex2 error: {(ex2 - EX2).abs().max()}")
     print(f"ey2 error: {(ey2 - EY2).abs().max()}")
     print(f"exy error: {(exy - EXY).abs().max()}")
-    print(f"ex2_mean error: {(ex2_mean - EX2_MEAN).abs().max()}")
-    print(f"ey2_mean error: {(ey2_mean - EY2_MEAN).abs().max()}")
+    # print(f"ex2_mean error: {(ex2_mean - EX2_MEAN).abs().max()}")
+    # print(f"ey2_mean error: {(ey2_mean - EY2_MEAN).abs().max()}")
     print(f"cost_volume error: {(cuda_cost_volume - torch_cost_volume).abs().max()}")
     print(f"ex2_grad error: {(ex2_grad - EX2_GRAD).abs().max()}")
     print(f"exy_grad error: {(exy_grad - EXY_GRAD).abs().max()}")
     print(f"img_grad error: {(cuda_img_grad - torch_img_grad).abs().max()}")
     # print(f"img_patch_grad error: {(cuda_img_patch_grad - torch_img_patch_grad).abs().max()}")
     import ipdb; ipdb.set_trace()
-    print(cuda_img_grad)
-    print(torch_img_grad)
+    print("cuda_img_grad: \n", cuda_img_grad[270: 275, 210: 212])
+    print("torch_img_grad: \n", torch_img_grad[270: 275, 210: 212])
