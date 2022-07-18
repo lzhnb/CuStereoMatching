@@ -97,7 +97,7 @@ def cuda_cost_volume_backward(
 
     # cv2.imwrite(os.path.join(os.path.dirname(__file__), "temp.png"), np.array(cost_volume_mask.cpu()) * 255)
 
-    return cost_volume, camera_grad, ex2, ey2, exy, ex2_grad, exy_grad
+    return cost_volume, camera_grad, ex2, ey2, exy, ex2_grad, exy_grad, ex2_mean, ey2_mean
 
 
 def torch_cost_volume_backward(
@@ -220,7 +220,7 @@ if __name__ == "__main__":
 
     torch.cuda.empty_cache()
     with custma.Timer("cuda time: {:.6f}s"):
-        cuda_cost_volume, cuda_img_grad, ex2, ey2, exy, ex2_grad, exy_grad = cuda_cost_volume_backward(
+        cuda_cost_volume, cuda_img_grad, ex2, ey2, exy, ex2_grad, exy_grad, ex2_mean, ey2_mean = cuda_cost_volume_backward(
             rgb[:, :, 0], proj, kernel_size, softargmax_beta, cost_volume_threshold
         )
 
@@ -249,6 +249,8 @@ if __name__ == "__main__":
     print(f"ex2 error: {(ex2 - EX2).abs().max()}")
     print(f"ey2 error: {(ey2 - EY2).abs().max()}")
     print(f"exy error: {(exy - EXY).abs().max()}")
+    print(f"ex2_mean error: {(ex2_mean - EX2_MEAN).abs().max()}")
+    print(f"ey2_mean error: {(ey2_mean - EY2_MEAN).abs().max()}")
     print(f"cost_volume error: {(cuda_cost_volume - torch_cost_volume).abs().max()}")
     print(f"ex2_grad error: {(ex2_grad - EX2_GRAD).abs().max()}")
     print(f"exy_grad error: {(exy_grad - EXY_GRAD).abs().max()}")

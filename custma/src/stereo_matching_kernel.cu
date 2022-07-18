@@ -15,41 +15,55 @@ __device__ float query_ij(
 
 // KERNELS
 __global__ void self_cov_kernel(
+    const int32_t elements,
     const int32_t H,
     const int32_t W,
     const int32_t D,
-    const int32_t kernel_size,
+    const int32_t ks,
     const float* __restrict__ inputs_ptr, // [H, W]
     // output
     float* __restrict__ mean_buffer, // [H, W - D]
     float* __restrict__ self_cov_ptr // [H, W - D]
 ) {
+    const int32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid >= elements) {
+        return;
+    }
     // the coordinate of pixel
-    const int32_t h_idx = blockIdx.x;
-    const int32_t w_idx = blockIdx.y;
-    // relative coordinate in the patch
-    const int32_t i = threadIdx.x;
-    const int32_t j = threadIdx.y;
+    const int32_t w_idx = tid % (W - D);
+    const int32_t h_idx = tid / (W - D);
 
-    const int32_t patch_i = h_idx + i - kernel_size / 2;
-    const int32_t patch_j = w_idx + D + j - kernel_size / 2;
-    const float val = query_ij(inputs_ptr, H, W, patch_i, patch_j);
+    // fullfill the mean buffer
+    float temp_mean = 0;
+    for (int32_t i = 0; i < ks; ++i) {
+        for (int32_t j = 0; j < ks; ++j) {
+            const int32_t patch_i = h_idx + i - ks / 2;
+            const int32_t patch_j = w_idx + D + j - ks / 2;
+            const float val = query_ij(inputs_ptr, H, W, patch_i, patch_j);
+            temp_mean += val;
+        }
+    }
+    temp_mean /= (ks * ks);
+    mean_buffer[h_idx * (W - D) + w_idx] = temp_mean;
 
-    atomicAdd(&mean_buffer[h_idx * (W - D) + w_idx], val);
-    __syncthreads();
-
-    const float _mean_tmp =
-        mean_buffer[h_idx * (W - D) + w_idx] / (kernel_size * kernel_size);
-    const float norm_val = val - _mean_tmp;
-    atomicAdd(&self_cov_ptr[h_idx * (W - D) + w_idx], norm_val * norm_val);
-    __syncthreads();
+    // get the self cov
+    for (int32_t i = 0; i < ks; ++i) {
+        for (int32_t j = 0; j < ks; ++j) {
+            const int32_t patch_i = h_idx + i - ks / 2;
+            const int32_t patch_j = w_idx + D + j - ks / 2;
+            const float val = query_ij(inputs_ptr, H, W, patch_i, patch_j);
+            const float norm_val = val - temp_mean;
+            self_cov_ptr[h_idx * (W - D) + w_idx] += powf(norm_val, 2);
+        }
+    }
 }
 
 __global__ void cross_cov_kernel(
+    const int32_t elements,
     const int32_t H,
     const int32_t W,
     const int32_t D,
-    const int32_t kernel_size,
+    const int32_t ks,
     const float* __restrict__ cam_ptr, // [H, W]
     const float* __restrict__ proj_ptr, // [H, W]
     const float* __restrict__ cam_mean_buffer, // [H, W - D]
@@ -57,29 +71,34 @@ __global__ void cross_cov_kernel(
     // output
     float* __restrict__ cross_cov_ptr // [H, W - D, W]
 ) {
-    // the coordinate of pixel
-    const int32_t h_idx = blockIdx.x;
-    const int32_t w_idx = blockIdx.y;
-    const int32_t d_idx = blockIdx.z;
-    // relative coordinate in the patch
-    const int32_t i = threadIdx.x;
-    const int32_t j = threadIdx.y;
+    const int32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid >= elements) {
+        return;
+    }
 
-    const float cam_mean = cam_mean_buffer[h_idx * (W - D) + w_idx];
-    const float proj_mean = proj_mean_buffer[h_idx * W + d_idx];
-    const int32_t cam_patch_i = h_idx + i - kernel_size / 2;
-    const int32_t cam_patch_j = w_idx + D + j - kernel_size / 2;
-    const float cam_val =
-        query_ij(cam_ptr, H, W, cam_patch_i, cam_patch_j) - cam_mean;
+    const int32_t d_idx = tid % W;
+    const int32_t w_idx = (tid / W) % (W - D);
+    const int32_t h_idx = tid / (W * (W - D));
 
-    const int32_t proj_patch_i = h_idx + i - kernel_size / 2;
-    const int32_t proj_patch_j = d_idx + j - kernel_size / 2;
-    const float proj_val =
-        query_ij(proj_ptr, H, W, proj_patch_i, proj_patch_j) - proj_mean;
+    for (int32_t i = 0; i < ks; ++i) {
+        for (int32_t j = 0; j < ks; ++j) {
+            const float cam_mean = cam_mean_buffer[h_idx * (W - D) + w_idx];
+            const float proj_mean = proj_mean_buffer[h_idx * W + d_idx];
+            const int32_t cam_patch_i = h_idx + i - ks / 2;
+            const int32_t cam_patch_j = w_idx + D + j - ks / 2;
+            const float cam_val =
+                query_ij(cam_ptr, H, W, cam_patch_i, cam_patch_j) - cam_mean;
 
-    atomicAdd(
-        &cross_cov_ptr[h_idx * (W - D) * W + w_idx * W + d_idx],
-        cam_val * proj_val);
+            const int32_t proj_patch_i = h_idx + i - ks / 2;
+            const int32_t proj_patch_j = d_idx + j - ks / 2;
+            const float proj_val =
+                query_ij(proj_ptr, H, W, proj_patch_i, proj_patch_j) -
+                proj_mean;
+
+            cross_cov_ptr[h_idx * (W - D) * W + w_idx * W + d_idx] +=
+                cam_val * proj_val;
+        }
+    }
 }
 
 __global__ void cost_volume_kernel(
@@ -109,46 +128,11 @@ __global__ void cost_volume_kernel(
     cost_volume_ptr[tid] = (exy + EPSILON) / (sqrtf(ex2 * ey2 + EPSILON));
 }
 
-__global__ void get_self_grad_kernel(
-    const int32_t H,
-    const int32_t W,
-    const int32_t D,
-    const int32_t kernel_size,
-    const float* __restrict__ inputs_ptr, // [H, W]
-    const float* __restrict__ cov_avg_ptr, // [H, W - D]
-    const float* __restrict__ cov_grad_ptr, // [H, W - D]
-    const float* __restrict__ cov_ptr, // [H, W - D]
-    // output
-    float* __restrict__ input_grad_ptr // [H, W]
-) {
-    // the coordinate of pixel
-    const int32_t h_idx = blockIdx.x;
-    const int32_t w_idx = blockIdx.y;
-    // relative coordinate in the patch
-    const int32_t i = threadIdx.x;
-    const int32_t j = threadIdx.y;
-
-    const int32_t patch_i = h_idx + i - kernel_size / 2;
-    const int32_t patch_j = w_idx + D + j - kernel_size / 2;
-
-    if (patch_i < 0 || patch_i >= H || patch_j < 0 || patch_j >= W) {
-        return;
-    }
-
-    const float val = query_ij(inputs_ptr, H, W, patch_i, patch_j);
-    const float avg = cov_avg_ptr[h_idx * (W - D) + w_idx];
-    const float grad = cov_grad_ptr[h_idx * (W - D) + w_idx];
-    const float factor = 2 * (val - avg / (kernel_size * kernel_size));
-
-    atomicAdd(&input_grad_ptr[patch_i * W + patch_j], factor * grad);
-    __syncthreads();
-}
-
 __global__ void get_cross_grad_kernel(
     const int32_t H,
     const int32_t W,
     const int32_t D,
-    const int32_t kernel_size,
+    const int32_t ks,
     const bool record_grad,
     const float* __restrict__ camera_ptr, // [H, W]
     const float* __restrict__ projector_ptr, // [H, W]
@@ -175,21 +159,24 @@ __global__ void get_cross_grad_kernel(
     const float ey2 = ey2_ptr[h_idx * W + d_idx];
     const float exy = exy_ptr[h_idx * (W - D) * W + w_idx * W + d_idx];
 
+    // const float factor = (sqrtf(ex2 * ey2 + EPSILON));
+    const float deno = 1 / (sqrtf(ex2 * ey2 + EPSILON)), deno3 = 1 / powf((sqrtf(ex2 * ey2 + EPSILON)), 3);
     const float cost_volume_grad =
         cost_volume_grad_ptr[h_idx * (W - D) * W + w_idx * W + d_idx];
+    const float ex2_grad =
+        -ey2_ptr[h_idx * W + d_idx] * (exy + EPSILON) * deno3 / 2;
+    const float exy_grad = cost_volume_grad * deno;
+    const float ex2_mean = ex2_mean_ptr[h_idx * (W - D) + w_idx];
+    const float ey2_mean = ey2_mean_ptr[h_idx * W + d_idx];
 
-    const float factor = (sqrtf(ex2 * ey2 + EPSILON));
-    const int32_t cam_patch_i = h_idx + i - kernel_size / 2;
-    const int32_t cam_patch_j = w_idx + D + j - kernel_size / 2;
-    const int32_t proj_patch_i = h_idx + i - kernel_size / 2;
-    const int32_t proj_patch_j = d_idx + j - kernel_size / 2;
+    const int32_t cam_patch_i = h_idx + i - ks / 2;
+    const int32_t cam_patch_j = w_idx + D + j - ks / 2;
+    const int32_t proj_patch_i = h_idx + i - ks / 2;
+    const int32_t proj_patch_j = d_idx + j - ks / 2;
 
     // record the intermediate gradient for debug
-    const float ex2_grad =
-        -ey2_ptr[h_idx * W + d_idx] * (exy + EPSILON) / (2 * powf(factor, 3));
-    const float exy_grad = cost_volume_grad / factor;
-    if (record_grad) {
-        if (i == 0 && j == 0) {
+    if (i == 0 && j == 0) {
+        if (record_grad) {
             atomicAdd(&ex2_grad_ptr[h_idx * (W - D) + w_idx], ex2_grad);
             exy_grad_ptr[h_idx * (W - D) * W + w_idx * W + d_idx] = exy_grad;
         }
@@ -204,20 +191,19 @@ __global__ void get_cross_grad_kernel(
     /* ex2 term */
     __syncthreads();
     const float cam_val = query_ij(camera_ptr, H, W, cam_patch_i, cam_patch_j);
-    const float cam_grad_ex2_term =
-        2 * (cam_val - ex2_mean_ptr[h_idx * (W - D) + w_idx]) * ex2_grad;
+    const float cam_grad_ex2_term = 2 * (cam_val - ex2_mean) * ex2_grad;
     atomicAdd(
         &camera_grad_ptr[cam_patch_i * W + cam_patch_j], cam_grad_ex2_term);
-    __syncthreads();
 
     /* exy term */
+    __syncthreads();
     const float proj_val =
         query_ij(projector_ptr, H, W, proj_patch_i, proj_patch_j);
-    const float cam_grad_exy_term =
-        (proj_val - ey2_mean_ptr[h_idx * W + d_idx]) * exy_grad;
-
+    const float cam_grad_exy_term = (proj_val - ey2_mean) * exy_grad;
     atomicAdd(
         &camera_grad_ptr[cam_patch_i * W + cam_patch_j], cam_grad_exy_term);
+
+    __syncthreads();
 }
 
 __global__ void exy_grad_to_image_kernel2(
@@ -270,6 +256,7 @@ vector<Tensor> stereo::stereo_matching_forward(
     // get parameters
     const int32_t H = camera.size(0), W = camera.size(1);
     const int32_t crop_w = W - D;
+    const int32_t threads = 1024;
     assert(projector.size(0) == H && projector.size(1) == W);
 
     /* self cov */
@@ -279,9 +266,10 @@ vector<Tensor> stereo::stereo_matching_forward(
     Tensor ex2 = torch::zeros(
         {H, crop_w},
         torch::TensorOptions().dtype(torch::kFloat).device(torch::kCUDA));
-    dim3 dim_block(kernel_size, kernel_size);
-    dim3 ex2_dim_grid(H, crop_w);
-    self_cov_kernel<<<ex2_dim_grid, dim_block>>>(
+    const int32_t ex2_elements = H * crop_w;
+    const int32_t ex2_blocks = ceil((ex2_elements - 1) / threads) + 1;
+    self_cov_kernel<<<ex2_blocks, threads>>>(
+        ex2_elements,
         H,
         W,
         D,
@@ -290,7 +278,6 @@ vector<Tensor> stereo::stereo_matching_forward(
         // output
         ex2_mean.data_ptr<float>(),
         ex2.data_ptr<float>());
-    ex2_mean /= (kernel_size * kernel_size);
 
     Tensor ey2_mean = torch::zeros(
         {H, W},
@@ -298,8 +285,10 @@ vector<Tensor> stereo::stereo_matching_forward(
     Tensor ey2 = torch::zeros(
         {H, W},
         torch::TensorOptions().dtype(torch::kFloat).device(torch::kCUDA));
-    dim3 ey2_dim_grid(H, W);
-    self_cov_kernel<<<ey2_dim_grid, dim_block>>>(
+    const int32_t ey2_elements = H * crop_w;
+    const int32_t ey2_blocks = ceil((ey2_elements - 1) / threads) + 1;
+    self_cov_kernel<<<ey2_blocks, threads>>>(
+        ey2_elements,
         H,
         W,
         0,
@@ -308,7 +297,6 @@ vector<Tensor> stereo::stereo_matching_forward(
         // output
         ey2_mean.data_ptr<float>(),
         ey2.data_ptr<float>());
-    ey2_mean /= (kernel_size * kernel_size);
 
     /* cross cov */
     Tensor exy = torch::zeros(
@@ -316,8 +304,10 @@ vector<Tensor> stereo::stereo_matching_forward(
         torch::TensorOptions().dtype(torch::kFloat).device(torch::kCUDA));
 
     // NOTE: atomicAdd is too slow for sync while the blocks are too many
-    dim3 exy_dim_grid(H, crop_w, W);
-    cross_cov_kernel<<<exy_dim_grid, dim_block>>>(
+    const int32_t exy_elements = H * crop_w * W;
+    const int32_t exy_blocks = ceil((exy_elements - 1) / threads) + 1;
+    cross_cov_kernel<<<exy_blocks, threads>>>(
+        exy_elements,
         H,
         W,
         0,
@@ -333,7 +323,7 @@ vector<Tensor> stereo::stereo_matching_forward(
         {H, crop_w, W},
         torch::TensorOptions().dtype(torch::kFloat).device(torch::kCUDA));
 
-    const int32_t elements = H * crop_w * W, threads = 1024;
+    const int32_t elements = H * crop_w * W;
     const int32_t blocks = ceil((elements - 1) / threads) + 1;
     cost_volume_kernel<<<blocks, threads>>>(
         elements,
