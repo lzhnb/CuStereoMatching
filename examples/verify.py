@@ -151,9 +151,11 @@ if __name__ == "__main__":
         torch_cost_volume, torch_camera_image_grad = \
             torch_cost_volume_backward(rgb[:,:, 0], proj, kernel_size, softargmax_beta, cost_volume_threshold)
 
-    import ipdb; ipdb.set_trace()
-    print(cuda_camera_image_grad)
-    print(torch_camera_image_grad)
+    # import ipdb; ipdb.set_trace()
+    print(cuda_camera_image_grad[270: 275, 210: 212])
+    print(torch_camera_image_grad[270: 275, 210: 212])
+    print(f"cost_volume error: {(cuda_cost_volume - torch_cost_volume).abs().max()}")
+    print(f"image_grad error: {(torch_camera_image_grad - cuda_camera_image_grad).abs().max()}")
     # print(disparity)
 
 
