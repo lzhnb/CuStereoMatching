@@ -69,6 +69,7 @@ def cuda_cost_volume_backward(
     with custma.Timer("cuda backward time: {:.6f}s"):
         # cost_volume.backward(torch.ones_like(cost_volume))
         camera_grad = camera_image.grad
+        camera_patch_grad = None
         camera_grad, ex2_grad, exy_grad = _C.stereo_matching_backward(
             torch.ones_like(cost_volume),
             camera_image.contiguous(),
@@ -97,7 +98,7 @@ def cuda_cost_volume_backward(
 
     # cv2.imwrite(os.path.join(os.path.dirname(__file__), "temp.png"), np.array(cost_volume_mask.cpu()) * 255)
 
-    return cost_volume, camera_grad, ex2, ey2, exy, ex2_grad, exy_grad, ex2_mean, ey2_mean
+    return cost_volume, camera_grad, camera_patch_grad, ex2, ey2, exy, ex2_grad, exy_grad, ex2_mean, ey2_mean
 
 
 def torch_cost_volume_backward(
@@ -120,7 +121,7 @@ def torch_cost_volume_backward(
             .squeeze(0)
             .squeeze(0)
         )
-        # camera_img_patches_.retain_grad()
+        camera_img_patches_.retain_grad()
 
         projector_img_patches = (
             extract_image_patch_pytoch(
@@ -194,6 +195,7 @@ def torch_cost_volume_backward(
         camera_img_patches_mean,
         projector_img_patches_mean,
         cost_volume,
+        camera_img_patches_.grad,
         camera_image_grad,
     )
 
@@ -220,7 +222,7 @@ if __name__ == "__main__":
 
     torch.cuda.empty_cache()
     with custma.Timer("cuda time: {:.6f}s"):
-        cuda_cost_volume, cuda_img_grad, ex2, ey2, exy, ex2_grad, exy_grad, ex2_mean, ey2_mean = cuda_cost_volume_backward(
+        cuda_cost_volume, cuda_img_grad, cuda_img_patch_grad, ex2, ey2, exy, ex2_grad, exy_grad, ex2_mean, ey2_mean = cuda_cost_volume_backward(
             rgb[:, :, 0], proj, kernel_size, softargmax_beta, cost_volume_threshold
         )
 
@@ -233,6 +235,7 @@ if __name__ == "__main__":
             EX2_MEAN,
             EY2_MEAN,
             torch_cost_volume,
+            torch_img_patch_grad,
             torch_img_grad,
         ) = torch_cost_volume_backward(
             rgb[:, :, 0], proj, kernel_size, softargmax_beta, cost_volume_threshold
@@ -255,6 +258,7 @@ if __name__ == "__main__":
     print(f"ex2_grad error: {(ex2_grad - EX2_GRAD).abs().max()}")
     print(f"exy_grad error: {(exy_grad - EXY_GRAD).abs().max()}")
     print(f"img_grad error: {(cuda_img_grad - torch_img_grad).abs().max()}")
+    # print(f"img_patch_grad error: {(cuda_img_patch_grad - torch_img_patch_grad).abs().max()}")
     import ipdb; ipdb.set_trace()
     print(cuda_img_grad)
     print(torch_img_grad)
