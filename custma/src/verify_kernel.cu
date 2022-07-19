@@ -85,6 +85,35 @@ __global__ void ex2_grad_to_image_kernel(
     __syncthreads();
 }
 
+__global__ void patch_grad_to_image_kernel(
+    const int32_t H,
+    const int32_t W,
+    const int32_t ks,
+    const float* __restrict__ norm_patches_grad_ptr, // [H, W, ks, ks]
+    const float* __restrict__ average_grad_ptr, // [H, W]
+    // output
+    float* __restrict__ grad_ptr // [H, W]
+) {
+    // the coordinate of pixel
+    const int32_t h_idx = blockIdx.x;
+    const int32_t w_idx = blockIdx.y;
+    // relative coordinate in the patch
+    const int32_t i = threadIdx.x;
+    const int32_t j = threadIdx.y;
+    const int32_t off = ks * ks;
+
+    const int32_t cam_i = h_idx + i - ks / 2;
+    const int32_t cam_j = w_idx + j - ks / 2;
+    if (cam_i < 0 || cam_i >= H || cam_j < 0 || cam_j >= W) {
+        return;
+    }
+
+    const float grad_val =
+        norm_patches_grad_ptr[h_idx * W * off + w_idx * off + i * ks + j];
+    const float avg_grad = average_grad_ptr[h_idx * W + w_idx];
+    atomicAdd(&grad_ptr[cam_i * W + cam_j], grad_val - avg_grad);
+}
+
 Tensor stereo::exy_grad_to_image(
     const Tensor& exy_grad, // [H, W - D, W]
     const Tensor& camera, // [H, W]
@@ -156,4 +185,28 @@ Tensor stereo::ex2_grad_to_image(
     // printf("\ncamera_grad-{0, 0}: %f (refer to 136.4016)\n\n",
     // camera_grad.index({0, 0}).item<float>());
     return camera_grad;
+}
+
+Tensor stereo::noramlized_patch_grad_to_image(
+    const Tensor& patch_grad, // [H, W, ks * ks]
+    const int32_t H,
+    const int32_t W,
+    const int32_t kernel_size) {
+    Tensor output_grad = torch::zeros(
+        {H, W},
+        torch::TensorOptions().dtype(torch::kFloat).device(torch::kCUDA));
+    dim3 dim_block(kernel_size, kernel_size);
+    dim3 img_dim_grid(H, W);
+
+    Tensor average_grad = torch::mean(patch_grad, 2); // [H, W]
+    patch_grad_to_image_kernel<<<img_dim_grid, dim_block>>>(
+        H,
+        W,
+        kernel_size,
+        patch_grad.data_ptr<float>(),
+        average_grad.data_ptr<float>(),
+        // output
+        output_grad.data_ptr<float>());
+
+    return output_grad;
 }

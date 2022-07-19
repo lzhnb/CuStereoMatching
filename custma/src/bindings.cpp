@@ -7,5 +7,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // use to verify the backward
     m.def("exy_grad_to_image", &stereo::exy_grad_to_image);
     m.def("ex2_grad_to_image", &stereo::ex2_grad_to_image);
+    m.def("noramlized_patch_grad_to_image", &stereo::noramlized_patch_grad_to_image);
 }
 

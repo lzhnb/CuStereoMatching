@@ -36,6 +36,12 @@ Tensor ex2_grad_to_image(
     const Tensor&,
     const int32_t
 );
+Tensor noramlized_patch_grad_to_image(
+    const Tensor&,
+    const int32_t,
+    const int32_t,
+    const int32_t
+);
 } // namespace stereo
 
 // Utils

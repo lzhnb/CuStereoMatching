@@ -65,13 +65,14 @@ __global__ void get_ex2_grad_kernel(
     atomicAdd(&ex2_grad_ptr[h_idx * (W - D) + w_idx], ex2_grad);
 }
 
-__global__ void patch_grad_to_image_kernel(
+__global__ void noramlized_patch_grad_to_image_kernel(
     const int32_t H,
     const int32_t W,
     const int32_t ks,
-    const float* __restrict__ camera_patches_grad_ptr, // [H, W, ks, ks]
+    const float* __restrict__ norm_patches_grad_ptr, // [H, W, ks, ks]
+    const float* __restrict__ average_grad_ptr, // [H, W]
     // output
-    float* __restrict__ camera_grad_ptr // [H, W]
+    float* __restrict__ grad_ptr // [H, W]
 ) {
     // the coordinate of pixel
     const int32_t h_idx = blockIdx.x;
@@ -86,9 +87,11 @@ __global__ void patch_grad_to_image_kernel(
     if (cam_i < 0 || cam_i >= H || cam_j < 0 || cam_j >= W) {
         return;
     }
-    atomicAdd(
-        &camera_grad_ptr[cam_i * W + cam_j],
-        camera_patches_grad_ptr[h_idx * W * off + w_idx * off + i * ks + j]);
+
+    const float grad_val =
+        norm_patches_grad_ptr[h_idx * W * off + w_idx * off + i * ks + j];
+    const float avg_grad = average_grad_ptr[h_idx * W + w_idx];
+    atomicAdd(&grad_ptr[cam_i * W + cam_j], grad_val - avg_grad);
 }
 
 vector<Tensor> stereo::stereo_matching_forward(
@@ -193,7 +196,7 @@ vector<Tensor> stereo::stereo_matching_backward(
     // torch::pow(factor, 3) / 2.f; Tensor ex2_grad = torch::bmm(X_grad_temp,
     // ey2.permute({0, 2, 1}));
     Tensor ex2_grad = torch::bmm(
-        -cost_volume_grad * (exy + EPSILON) / torch::pow(factor, 3) / 2.f,
+        -cost_volume_grad * (exy + EPSILON) / torch::pow(factor, 3) / 2,
         ey2.permute({0, 2, 1}));
     Tensor exy_grad = cost_volume_grad / factor;
 
@@ -236,13 +239,15 @@ vector<Tensor> stereo::stereo_matching_backward(
                 camera_patch.reshape({H * W, 1, kernel_size * kernel_size}))
                 .reshape({H, W, kernel_size * kernel_size}));
 
+    Tensor average_grad = torch::mean(camera_patch_grad, 2);
     Tensor camera_grad = torch::zeros_like(camera);
     dim3 img_dim_grid(H, W);
-    patch_grad_to_image_kernel<<<img_dim_grid, dim_block>>>(
+    noramlized_patch_grad_to_image_kernel<<<img_dim_grid, dim_block>>>(
         H,
         W,
         kernel_size,
         camera_patch_grad.data_ptr<float>(),
+        average_grad.data_ptr<float>(),
         // output
         camera_grad.data_ptr<float>());
 
