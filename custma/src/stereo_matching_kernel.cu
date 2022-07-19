@@ -228,11 +228,13 @@ vector<Tensor> stereo::stereo_matching_backward(
     projector_patch -= projector_patch_mean;
 
     // combine exy term and ex2 term
-    Tensor camera_patch_grad = torch::bmm(exy_grad, projector_patch) +
-        torch::bmm(
-            ex2_grad.reshape({H * W, 1, 1}),
-            camera_patch.reshape({H * W, 1, kernel_size * kernel_size}))
-            .reshape({H, W, kernel_size * kernel_size});
+    Tensor camera_patch_grad = torch::add(
+        torch::bmm(exy_grad, projector_patch),
+        2 *
+            torch::bmm(
+                ex2_grad.reshape({H * W, 1, 1}),
+                camera_patch.reshape({H * W, 1, kernel_size * kernel_size}))
+                .reshape({H, W, kernel_size * kernel_size}));
 
     Tensor camera_grad = torch::zeros_like(camera);
     dim3 img_dim_grid(H, W);

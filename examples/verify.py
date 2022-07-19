@@ -53,7 +53,10 @@ def cuda_cost_volume_backward(
 
     ex2 = torch.zeros_like(camera_image)
     ey2 = torch.zeros_like(projector_image)
-    exy = torch.zeros([camera_image.shape[0], camera_image.shape[1], projector_image.shape[1]], device=camera_image.device)
+    exy = torch.zeros(
+        [camera_image.shape[0], camera_image.shape[1], projector_image.shape[1]],
+        device=camera_image.device,
+    )
     ex2_mean = torch.zeros_like(ex2)
     ey2_mean = torch.zeros_like(ey2)
     ex2_grad = torch.zeros_like(ex2)
@@ -77,7 +80,7 @@ def cuda_cost_volume_backward(
             ex2,
             ey2,
             exy,
-            kernel_size
+            kernel_size,
         )
         # camera_grad = _C.exy_grad_to_image(torch.ones_like(exy), camera_image.contiguous(), projector_image.contiguous(), ey2_mean, kernel_size)
         # camera_grad = _C.ex2_grad_to_image(torch.ones_like(ex2), camera_image.contiguous(), ex2_mean, kernel_size)
@@ -95,7 +98,18 @@ def cuda_cost_volume_backward(
 
     # cv2.imwrite(os.path.join(os.path.dirname(__file__), "temp.png"), np.array(cost_volume_mask.cpu()) * 255)
 
-    return cost_volume, camera_grad, camera_patch_grad, ex2, ey2, exy, ex2_grad, exy_grad, ex2_mean, ey2_mean
+    return (
+        cost_volume,
+        camera_grad,
+        camera_patch_grad,
+        ex2,
+        ey2,
+        exy,
+        ex2_grad,
+        exy_grad,
+        ex2_mean,
+        ey2_mean,
+    )
 
 
 def torch_cost_volume_backward(
@@ -120,7 +134,7 @@ def torch_cost_volume_backward(
         )
         camera_img_patches_.retain_grad()
 
-        projector_img_patches = (
+        projector_img_patches_ = (
             extract_image_patch_pytoch(
                 projector_image.unsqueeze(0).unsqueeze(0),
                 kernel=kernel_size,
@@ -133,7 +147,7 @@ def torch_cost_volume_backward(
 
         H, W = camera_img_patches_.shape[:2]
         camera_img_patches = camera_img_patches_.contiguous().reshape(H, W, -1)
-        projector_img_patches = projector_img_patches.contiguous().reshape(H, W, -1)
+        projector_img_patches = projector_img_patches_.contiguous().reshape(H, W, -1)
         camera_img_patches_mean = torch.mean(camera_img_patches, dim=-1, keepdim=True)
         projector_img_patches_mean = torch.mean(
             projector_img_patches, dim=-1, keepdim=True
@@ -198,6 +212,8 @@ def torch_cost_volume_backward(
         cost_volume,
         camera_img_patches_.grad,
         camera_image_grad,
+        camera_img_patches,
+        projector_img_patches,
     )
 
 
@@ -223,7 +239,18 @@ if __name__ == "__main__":
 
     torch.cuda.empty_cache()
     with custma.Timer("cuda time: {:.6f}s"):
-        cuda_cost_volume, cuda_img_grad, cuda_img_patch_grad, ex2, ey2, exy, ex2_grad, exy_grad, ex2_mean, ey2_mean = cuda_cost_volume_backward(
+        (
+            cuda_cost_volume,
+            cuda_img_grad,
+            cuda_img_patch_grad,
+            ex2,
+            ey2,
+            exy,
+            ex2_grad,
+            exy_grad,
+            ex2_mean,
+            ey2_mean,
+        ) = cuda_cost_volume_backward(
             rgb[:, :, 0], proj, kernel_size, softargmax_beta, cost_volume_threshold
         )
 
@@ -239,6 +266,8 @@ if __name__ == "__main__":
             torch_cost_volume,
             torch_img_patch_grad,
             torch_img_grad,
+            camera_img_patches,
+            projector_img_patches,
         ) = torch_cost_volume_backward(
             rgb[:, :, 0], proj, kernel_size, softargmax_beta, cost_volume_threshold
         )
@@ -262,8 +291,19 @@ if __name__ == "__main__":
     print(f"cost_volume error: {(cuda_cost_volume - torch_cost_volume).abs().max()}")
     print(f"ex2_grad error: {(ex2_grad - EX2_GRAD).abs().max()}")
     print(f"exy_grad error: {(exy_grad - EXY_GRAD).abs().max()}")
+
+    cuda_img_patch_grad = torch.bmm(
+        exy_grad, projector_img_patches.reshape(H, W, -1)
+    ) + 2 * torch.bmm(
+        ex2_grad.reshape(H * W, 1, 1), camera_img_patches.reshape(H * W, 1, 225)
+    ).reshape(
+        H, W, 225
+    )
     print(f"img_grad error: {(cuda_img_grad - torch_img_grad).abs().max()}")
-    # print(f"img_patch_grad error: {(cuda_img_patch_grad - torch_img_patch_grad).abs().max()}")
-    import ipdb; ipdb.set_trace()
-    print("cuda_img_grad: \n", cuda_img_grad[270: 275, 210: 212])
-    print("torch_img_grad: \n", torch_img_grad[270: 275, 210: 212])
+    # print(f"img_grad error: {(cuda_img_grad - torch_img_patch_grad.reshape(H, W, -1)).abs().max()}")
+    print(
+        f"img_patch_grad error: {(cuda_img_patch_grad - torch_img_patch_grad.reshape(H, W, 225)).abs().max()}"
+    )
+    print("cuda_img_grad: \n", cuda_img_grad[270:275, 210:212])
+    print("torch_img_grad: \n", torch_img_grad[270:275, 210:212])
+
