@@ -47,23 +47,9 @@ def cuda_cost_volume_backward(
 ) -> torch.Tensor:
 
     camera_image.requires_grad_(True)
-    # camera_image_patches = extract_image_patch_pytoch(
-    #     camera_image.unsqueeze(0).unsqueeze(0),
-    #     kernel = kernel_size,
-    #     stride = 1,
-    #     pad = int((kernel_size - 1) / 2)
-    # ).squeeze(0).squeeze(0)
-
-    # projector_image_patches = extract_image_patch_pytoch(
-    #     projector_image.unsqueeze(0).unsqueeze(0),
-    #     kernel = kernel_size,
-    #     stride = 1,
-    #     pad = int((kernel_size - 1) / 2)
-    # ).squeeze(0).squeeze(0)
-    # camera_image_patches.retain_grad()
 
     with custma.Timer("cuda forward time: {:.6f}s"):
-        cost_volume = custma.stereo_matching(camera_image.contiguous(), projector_image.contiguous(), 200, kernel_size)
+        cost_volume = custma.stereo_matching(camera_image.contiguous(), projector_image.contiguous(), 0, kernel_size)
     with custma.Timer("cuda backward time: {:.6f}s"):
         cost_volume.backward(torch.ones_like(cost_volume))
 
@@ -72,8 +58,6 @@ def cuda_cost_volume_backward(
     cost_volume_max, _ = torch.max(cost_volume.detach().contiguous().reshape(H * W, -1), dim=-1)
     cost_volume_max = cost_volume_max.reshape(H, W)
     cost_volume_mask = torch.where(cost_volume_max > cost_volume_threshold, torch.ones_like(cost_volume_max), torch.zeros_like(cost_volume_max))
-
-    # cv2.imwrite(os.path.join(os.path.dirname(__file__), "temp.png"), np.array(cost_volume_mask.cpu()) * 255)
 
     return cost_volume, camera_image.grad
 
