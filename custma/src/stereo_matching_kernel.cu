@@ -37,69 +37,35 @@ __global__ void unfold_kernel(
     outputs_ptr[h_idx * W * off + w_idx * off + i * ks + j] = val;
 }
 
-__global__ void forward_cost_volume_kernel(
+__global__ void gather_exy_cost_volume_kernel(
     const int32_t H,
     const int32_t W,
     const int32_t D,
-    const int32_t kernel_size,
-    const float* __restrict__ cam_ptr, // [H, W]
-    const float* __restrict__ proj_ptr, // [H, W]
+    const float* __restrict__ full_exy_ptr, // [H, W, W]
+    const float* __restrict__ full_cost_volume_ptr, // [H, W, W]
     // output
-    float* __restrict__ cost_volume_ptr // [H, crop_w, D + 1]
+    float* __restrict__ exy_ptr, // [H, W, D]
+    float* __restrict__ cost_volume_ptr // [H, W, D]
 ) {
     const int32_t h_idx = blockIdx.x, w_idx = blockIdx.y, d_idx = threadIdx.x;
 
-    float cam_patch[MAX_KERNEL_SIZE][MAX_KERNEL_SIZE];
-    float proj_patch[MAX_KERNEL_SIZE][MAX_KERNEL_SIZE];
-
-    // loop patch to get the mean value
-    float cam_mean = 0, proj_mean = 0;
-#pragma unroll
-    for (int32_t row = 0; row < kernel_size; ++row) {
-        for (int32_t col = 0; col < kernel_size; ++col) {
-            const int32_t cam_i = h_idx + row - kernel_size / 2,
-                          cam_j = w_idx + col - kernel_size / 2,
-                          proj_i = h_idx + row - kernel_size / 2,
-                          proj_j = d_idx + col - kernel_size / 2;
-            const float cam = query_ij(cam_ptr, H, W, cam_i, cam_j);
-            const float proj = query_ij(proj_ptr, H, W, proj_i, proj_j);
-            cam_patch[row][col] = cam;
-            proj_patch[row][col] = proj;
-            cam_mean += cam;
-            proj_mean += proj;
-        }
-    }
-    cam_mean /= (kernel_size * kernel_size);
-    proj_mean /= (kernel_size * kernel_size);
-
-    float exy = 0, ex2 = 0, ey2 = 0;
-#pragma unroll
-    for (int32_t row = 0; row < kernel_size; ++row) {
-        for (int32_t col = 0; col < kernel_size; ++col) {
-            const float cam = cam_patch[row][col] - cam_mean;
-            const float proj = proj_patch[row][col] - proj_mean;
-
-            exy += cam * proj;
-            ex2 += cam * cam;
-            ey2 += proj * proj;
-        }
-    }
-    cost_volume_ptr[h_idx * (W * (W - D)) + w_idx * W + d_idx] =
-        (exy + EPSILON) / (sqrtf(ex2 * ey2 + EPSILON));
+    exy_ptr[h_idx * W * D + (w_idx + D) * D + d_idx] =
+        full_exy_ptr[h_idx * W * W + (w_idx + D) * W + w_idx + d_idx];
+    cost_volume_ptr[h_idx * W * D + (w_idx + D) * D + d_idx] =
+        full_cost_volume_ptr[h_idx * W * W + (w_idx + D) * W + w_idx + d_idx];
 }
 
 __global__ void get_patches_grad_kernel(
-    // const int32_t elements,
     const int32_t H,
     const int32_t W,
     const int32_t D,
     const int32_t ks,
-    const float* __restrict__ cost_volume_grad, // [H, crop_w, D + 1]
+    const float* __restrict__ cost_volume_grad, // [H, W, D]
     const float* __restrict__ cam_ptr, // [H, W]
     const float* __restrict__ proj_ptr, // [H, W]
     const float* __restrict__ ex2_ptr, // [H, W]
     const float* __restrict__ ey2_ptr, // [H, W]
-    const float* __restrict__ exy_ptr, // [H, W, W]
+    const float* __restrict__ exy_ptr, // [H, W, D]
     const float* __restrict__ cam_patch_mean_ptr, // [H, W]
     const float* __restrict__ proj_patch_mean_ptr, // [H, W]
     // output
@@ -108,29 +74,29 @@ __global__ void get_patches_grad_kernel(
     const int32_t h_idx = blockIdx.x, w_idx = blockIdx.y;
     const int32_t row = threadIdx.x, col = threadIdx.y;
 
-    const float cam_mean = cam_patch_mean_ptr[h_idx * W + w_idx];
+    const float cam_mean = cam_patch_mean_ptr[h_idx * W + w_idx + D];
 
     const int32_t cam_i = h_idx + row - ks / 2;
-    const int32_t cam_j = w_idx + col - ks / 2;
+    const int32_t cam_j = w_idx + col - ks / 2 + D;
     const float cam = query_ij(cam_ptr, H, W, cam_i, cam_j) - cam_mean;
 
-    const float ex2 = ex2_ptr[h_idx * W + w_idx];
+    const float ex2 = ex2_ptr[h_idx * W + w_idx + D];
 
-    for (int32_t d_idx = 0; d_idx < W; ++d_idx) {
-        const float proj_mean = proj_patch_mean_ptr[h_idx * W + d_idx];
+    for (int32_t d_idx = 0; d_idx < D; ++d_idx) {
+        const float proj_mean = proj_patch_mean_ptr[h_idx * W + w_idx + d_idx];
 
         const int32_t proj_i = h_idx + row - ks / 2;
-        const int32_t proj_j = d_idx + col - ks / 2;
+        const int32_t proj_j = d_idx + col - ks / 2 + w_idx;
         const float proj = query_ij(proj_ptr, H, W, proj_i, proj_j) - proj_mean;
 
-        const float ey2 = ey2_ptr[h_idx * W + d_idx];
-        const float exy = exy_ptr[h_idx * W * W + w_idx * W + d_idx];
+        const float ey2 = ey2_ptr[h_idx * W + w_idx + d_idx];
+        const float exy = exy_ptr[h_idx * W * D + (w_idx + D) * D + d_idx];
 
         const float cost_grad =
-            cost_volume_grad[h_idx * W * W + w_idx * W + d_idx];
+            cost_volume_grad[h_idx * W * D + (w_idx + D) * D + d_idx];
         const int32_t off_w = ks * ks, off_h = ks * ks * W;
         float* curr_camera_patches_grad_ptr =
-            camera_patches_grad_ptr + h_idx * off_h + w_idx * off_w;
+            camera_patches_grad_ptr + h_idx * off_h + (w_idx + D) * off_w;
 
         // calculate 1 time to save time
         const float deno = 1 / (sqrtf(ex2 * ey2 + EPSILON)),
@@ -158,10 +124,6 @@ __global__ void patches_grad_to_image_kernel(
     if (tid >= elements) {
         return;
     }
-    // const int32_t crop_w = W - D;
-    // const int32_t d_idx = tid % (D + 1);
-    // const int32_t w_idx = (tid / (D + 1)) % crop_w;
-    // const int32_t h_idx = tid / ((D + 1) * crop_w);
     const int32_t k2_idx = tid % ks;
     const int32_t k1_idx = (tid / ks) % ks;
     const int32_t w_idx = (tid / (ks * ks)) % W;
@@ -230,10 +192,25 @@ vector<Tensor> stereo::stereo_matching_forward(
             projector_patch.reshape({H * W, kernel_size * kernel_size, 1}))
             .reshape({H, -1, W});
 
-    Tensor exy = torch::bmm(camera_patch, projector_patch.permute({0, 2, 1}));
+    Tensor full_exy =
+        torch::bmm(camera_patch, projector_patch.permute({0, 2, 1}));
+    Tensor full_cost_volume =
+        (full_exy + EPSILON) / torch::sqrt(torch::bmm(ex2, ey2) + EPSILON);
 
-    Tensor cost_volume =
-        (exy + EPSILON) / torch::sqrt(torch::bmm(ex2, ey2) + EPSILON);
+    Tensor exy = torch::zeros(
+        {H, W, D},
+        torch::TensorOptions().dtype(torch::kFloat).device(torch::kCUDA));
+    Tensor cost_volume = torch::zeros_like(exy);
+    dim3 block_dim(H, crop_w);
+    gather_exy_cost_volume_kernel<<<block_dim, D>>>(
+        H,
+        W,
+        D,
+        full_exy.data_ptr<float>(),
+        full_cost_volume.data_ptr<float>(),
+        // output
+        exy.data_ptr<float>(),
+        cost_volume.data_ptr<float>());
 
     vector<Tensor> results(6);
 
@@ -248,12 +225,12 @@ vector<Tensor> stereo::stereo_matching_forward(
 }
 
 Tensor stereo::stereo_matching_backward(
-    const Tensor& cost_volume_grad, // [H, crop_w, D + 1]
+    const Tensor& cost_volume_grad, // [H, W, D]
     const Tensor& camera, // [H, W]
     const Tensor& projector, // [H, W]
     const Tensor& ex2, // [H, W]
     const Tensor& ey2, // [H, W]
-    const Tensor& exy, // [H, W, W]
+    const Tensor& exy, // [H, W, D]
     const Tensor& cam_patch_mean, // [H, W]
     const Tensor& proj_patch_mean, // [H, W]
     const int32_t kernel_size) {
@@ -263,21 +240,15 @@ Tensor stereo::stereo_matching_backward(
     // get parameters
     const int32_t H = cost_volume_grad.size(0), W = cost_volume_grad.size(1),
                   D = cost_volume_grad.size(2);
-    // const int32_t H = cost_volume_grad.size(0), crop_w =
-    // cost_volume_grad.size(1), D = cost_volume_grad.size(2) - 1; const int32_t
-    // W = crop_w + D;
-    const int32_t elements1 = H * W, threads = 1024;
-    // const int32_t elements1 = H * crop_w * (D + 1), threads = 1024;
+    const int32_t crop_w = W - D;
 
     assert(kernel_size <= MAX_KERNEL_SIZE);
     Tensor camera_patches_grad = torch::zeros(
         {H, W, kernel_size, kernel_size},
         torch::TensorOptions().dtype(torch::kFloat).device(torch::kCUDA));
 
-    const int32_t blocks1 = ceil((elements1 - 1) / threads) + 1;
-    const dim3 dim_block(H, W), thread_block(kernel_size, kernel_size);
+    const dim3 dim_block(H, crop_w), thread_block(kernel_size, kernel_size);
     get_patches_grad_kernel<<<dim_block, thread_block>>>(
-        // elements1,
         H,
         W,
         D,
@@ -296,7 +267,7 @@ Tensor stereo::stereo_matching_backward(
     Tensor camera_grad = torch::zeros(
         {H, W},
         torch::TensorOptions().dtype(torch::kFloat).device(torch::kCUDA));
-    const int32_t elements2 = H * W * kernel_size * kernel_size;
+    const int32_t elements2 = H * W * kernel_size * kernel_size, threads = 1024;
     const int32_t blocks2 = ceil((elements2 - 1) / threads) + 1;
     patches_grad_to_image_kernel<<<blocks2, threads>>>(
         elements2,
