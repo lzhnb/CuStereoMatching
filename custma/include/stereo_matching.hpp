@@ -1,17 +1,30 @@
 // Copyright 2022 Zhihao Liang
 #pragma once
 #include <cuda_runtime.h>
-#include <torch/extension.h>
 #include <thrust/sort.h>
+#include <torch/extension.h>
+#include <vector>
 
+using std::vector;
 using torch::Tensor;
 
-namespace stereo
-{
-    Tensor stereo_matching_forward(const Tensor&, const Tensor&, const int32_t, const int32_t);
-    Tensor stereo_matching_backward(const Tensor&, const Tensor&, const Tensor&, const int32_t);
+namespace stereo {
+vector<Tensor> stereo_matching_forward(
+    const Tensor&,
+    const Tensor&,
+    const int32_t,
+    const int32_t);
+Tensor stereo_matching_backward(
+    const Tensor&,
+    const Tensor&,
+    const Tensor&,
+    const Tensor&,
+    const Tensor&,
+    const Tensor&,
+    const Tensor&,
+    const Tensor&,
+    const int32_t);
 } // namespace stereo
-
 
 // Utils
 #define CHECK_CUDA(x) TORCH_CHECK(x.is_cuda(), #x " must be a CUDA tensor")
@@ -21,11 +34,10 @@ namespace stereo
 #define CHECK_CONTIGUOUS(x) \
     TORCH_CHECK(x.is_contiguous(), #x " must be contiguous")
 
-#define CHECK_INPUT(x)      \
-    CHECK_CUDA(x);          \
+#define CHECK_INPUT(x) \
+    CHECK_CUDA(x);     \
     CHECK_CONTIGUOUS(x)
 
-#define CHECK_CPU_INPUT(x)  \
-    CHECK_CPU(x);           \
+#define CHECK_CPU_INPUT(x) \
+    CHECK_CPU(x);          \
     CHECK_CONTIGUOUS(x)
-
