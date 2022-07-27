@@ -71,7 +71,7 @@ __global__ void forward_cost_volume_kernel(
 }
 
 __global__ void get_patches_grad_kernel(
-    const int32_t elements,
+    // const int32_t elements,
     const int32_t H,
     const int32_t W,
     const int32_t D,
@@ -83,78 +83,76 @@ __global__ void get_patches_grad_kernel(
     float *__restrict__ camera_patches_grad_ptr // [H, W, kernel_size, kernel_size]
 )
 {
-    const int32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
-    if (tid >= elements)
-    {
-        return;
-    }
-    // const int32_t crop_w = W - D;
-    // const int32_t d_idx = tid % (D + 1);
-    // const int32_t w_idx = (tid / (D + 1)) % crop_w;
-    // const int32_t h_idx = tid / ((D + 1) * crop_w);
-    const int32_t d_idx = tid % W;
-    const int32_t w_idx = (tid / W) % W;
-    const int32_t h_idx = tid / (W * W);
+    // const int32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+    // if (tid >= elements)
+    // {
+    //     return;
+    // }
+    const int32_t h_idx = blockIdx.x;
+    const int32_t w_idx = threadIdx.x;
 
-    // loop patch to get the mean value
-    float cam_mean = 0, proj_mean = 0;
+    for (int32_t d_idx = 0; d_idx < W; ++d_idx) {
+        // loop patch to get the mean value
+        float cam_mean = 0, proj_mean = 0;
 #pragma unroll
-    for (int32_t i = 0; i < kernel_size; ++i)
-    {
-        for (int32_t j = 0; j < kernel_size; ++j)
+        for (int32_t i = 0; i < kernel_size; ++i)
         {
-            const int32_t cam_proj_i = h_idx + i - kernel_size / 2;
-            const int32_t cam_j = w_idx + j - kernel_size / 2;
-            const int32_t proj_j = d_idx + j - kernel_size / 2;
-            const float cam = query_ij(cam_ptr, H, W, cam_proj_i, cam_j);
-            const float proj = query_ij(proj_ptr, H, W, cam_proj_i, proj_j);
-            cam_mean += cam;
-            proj_mean += proj;
+            for (int32_t j = 0; j < kernel_size; ++j)
+            {
+                const int32_t cam_proj_i = h_idx + i - kernel_size / 2;
+                const int32_t cam_j = w_idx + j - kernel_size / 2;
+                const int32_t proj_j = d_idx + j - kernel_size / 2;
+                const float cam = query_ij(cam_ptr, H, W, cam_proj_i, cam_j);
+                const float proj = query_ij(proj_ptr, H, W, cam_proj_i, proj_j);
+                cam_mean += cam;
+                proj_mean += proj;
+            }
         }
-    }
-    cam_mean /= (kernel_size * kernel_size);
-    proj_mean /= (kernel_size * kernel_size);
+        cam_mean /= (kernel_size * kernel_size);
+        proj_mean /= (kernel_size * kernel_size);
 
-    float exy = 0, ex2 = 0, ey2 = 0;
+        float exy = 0, ex2 = 0, ey2 = 0;
 #pragma unroll
-    for (int32_t i = 0; i < kernel_size; ++i)
-    {
-        for (int32_t j = 0; j < kernel_size; ++j)
+        for (int32_t i = 0; i < kernel_size; ++i)
         {
-            const int32_t cam_proj_i = h_idx + i - kernel_size / 2;
-            const int32_t cam_j = w_idx + j - kernel_size / 2;
-            const int32_t proj_j = d_idx + j - kernel_size / 2;
-            const float cam = query_ij(cam_ptr, H, W, cam_proj_i, cam_j) - cam_mean;
-            const float proj = query_ij(proj_ptr, H, W, cam_proj_i, proj_j) - proj_mean;
+            for (int32_t j = 0; j < kernel_size; ++j)
+            {
+                const int32_t cam_proj_i = h_idx + i - kernel_size / 2;
+                const int32_t cam_j = w_idx + j - kernel_size / 2;
+                const int32_t proj_j = d_idx + j - kernel_size / 2;
+                const float cam = query_ij(cam_ptr, H, W, cam_proj_i, cam_j) - cam_mean;
+                const float proj = query_ij(proj_ptr, H, W, cam_proj_i, proj_j) - proj_mean;
 
-            exy += cam * proj;
-            ex2 += cam * cam;
-            ey2 += proj * proj;
+                exy += cam * proj;
+                ex2 += cam * cam;
+                ey2 += proj * proj;
+            }
         }
-    }
 
-    const float cost_grad = cost_volume_grad[tid];
-    const int32_t off_w = kernel_size * kernel_size, off_h = kernel_size * kernel_size * W;
-    float *curr_camera_patches_grad_ptr = camera_patches_grad_ptr + h_idx * off_h + w_idx * off_w;
+        const float cost_grad = cost_volume_grad[h_idx * W * W + w_idx * W + d_idx];
+        const int32_t off_w = kernel_size * kernel_size, off_h = kernel_size * kernel_size * W;
+        float *curr_camera_patches_grad_ptr = camera_patches_grad_ptr + h_idx * off_h + w_idx * off_w;
 
-    // calculate 1 time to save time
-    const float deno = 1 / (sqrtf(ex2 * ey2 + EPSILON)), deno3 = 1 / powf((sqrtf(ex2 * ey2 + EPSILON)), 3);
+        // calculate 1 time to save time
+        const float deno = 1 / (sqrtf(ex2 * ey2 + EPSILON)), deno3 = 1 / powf((sqrtf(ex2 * ey2 + EPSILON)), 3);
 #pragma unroll
-    for (int32_t i = 0; i < kernel_size; ++i)
-    {
-        for (int32_t j = 0; j < kernel_size; ++j)
+        for (int32_t i = 0; i < kernel_size; ++i)
         {
-            const int32_t cam_proj_i = h_idx + i - kernel_size / 2;
-            const int32_t cam_j = w_idx + j - kernel_size / 2;
-            const int32_t proj_j = d_idx + j - kernel_size / 2;
-            const float cam = query_ij(cam_ptr, H, W, cam_proj_i, cam_j) - cam_mean;
-            const float proj = query_ij(proj_ptr, H, W, cam_proj_i, proj_j) - proj_mean;
-            // exy term
-            float exy_factor = proj * deno;
-            // ex2 term
-            float ex2_factor = -(ey2 * cam * (exy + EPSILON)) * deno3;
-            const float grad = cost_grad * (exy_factor + ex2_factor);
-            atomicAdd(curr_camera_patches_grad_ptr + i * kernel_size + j, grad);
+            for (int32_t j = 0; j < kernel_size; ++j)
+            {
+                const int32_t cam_proj_i = h_idx + i - kernel_size / 2;
+                const int32_t cam_j = w_idx + j - kernel_size / 2;
+                const int32_t proj_j = d_idx + j - kernel_size / 2;
+                const float cam = query_ij(cam_ptr, H, W, cam_proj_i, cam_j) - cam_mean;
+                const float proj = query_ij(proj_ptr, H, W, cam_proj_i, proj_j) - proj_mean;
+                // exy term
+                float exy_factor = proj * deno;
+                // ex2 term
+                float ex2_factor = -(ey2 * cam * (exy + EPSILON)) * deno3;
+                const float grad = cost_grad * (exy_factor + ex2_factor);
+                curr_camera_patches_grad_ptr[i * kernel_size + j] += grad;
+                // atomicAdd(curr_camera_patches_grad_ptr + i * kernel_size + j, grad);
+            }
         }
     }
 }
@@ -242,7 +240,7 @@ Tensor stereo::stereo_matching_backward(
     const int32_t H = cost_volume_grad.size(0), W = cost_volume_grad.size(1), D = cost_volume_grad.size(2);
     // const int32_t H = cost_volume_grad.size(0), crop_w = cost_volume_grad.size(1), D = cost_volume_grad.size(2) - 1;
     // const int32_t W = crop_w + D;
-    const int32_t elements1 = H * W * W, threads = 1024;
+    const int32_t elements1 = H * W, threads = 1024;
     // const int32_t elements1 = H * crop_w * (D + 1), threads = 1024;
 
     assert(kernel_size <= MAX_KERNEL_SIZE);
@@ -250,8 +248,8 @@ Tensor stereo::stereo_matching_backward(
                                               torch::TensorOptions().dtype(torch::kFloat).device(torch::kCUDA));
 
     const int32_t blocks1 = ceil((elements1 - 1) / threads) + 1;
-    get_patches_grad_kernel<<<blocks1, threads>>>(
-        elements1,
+    get_patches_grad_kernel<<<H, W>>>(
+        // elements1,
         H,
         W,
         D,
